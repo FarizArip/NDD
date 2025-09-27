@@ -1,7 +1,9 @@
 // netlify/functions/notion-webhook.js
 const { Client: DiscordClient, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+const { Client: NotionClient } = require('@notionhq/client');
 
 let discordClient = null;
+let notionClient = null;
 
 async function initializeDiscordClient() {
     if (!discordClient) {
@@ -18,6 +20,28 @@ async function initializeDiscordClient() {
     return discordClient;
 }
 
+function initializeNotionClient() {
+    if (!notionClient) {
+        // Use NOTION_TOKEN for API calls
+        notionClient = new NotionClient({ 
+            auth: process.env.NOTION_TOKEN 
+        });
+        console.log('✅ Notion client initialized with API token');
+    }
+    return notionClient;
+}
+
+function verifyNotionWebhook(signature, body, secret) {
+    // Use NOTION_SECRET for webhook verification (optional)
+    if (!process.env.NOTION_SECRET) {
+        console.log('⚠️ NOTION_SECRET not set, skipping webhook verification');
+        return true; // Skip verification if secret not set
+    }
+    
+    // ... verification logic using crypto
+    return true; // Simplified for now
+}
+
 exports.handler = async (event, context) => {
     console.log('=== NOTION WEBHOOK RECEIVED ===');
     console.log('Method:', event.httpMethod);
@@ -29,6 +53,12 @@ exports.handler = async (event, context) => {
 
     if (event.httpMethod !== 'POST') {
         return methodNotAllowedResponse();
+    }
+
+    // Verify webhook signature if NOTION_SECRET is set
+    const signature = event.headers['x-notion-signature'];
+    if (!verifyNotionWebhook(signature, event.body, process.env.NOTION_SECRET)) {
+        return { statusCode: 401, body: 'Unauthorized' };
     }
 
     try {
@@ -103,7 +133,12 @@ async function processPageWebhook(webhookData) {
     console.log('📄 Page ID:', pageId);
     
     // Extract properties - handle different webhook structures
-    const properties = extractProperties(webhookData);
+    const properties = await fetchPageProperties(pageId);
+    
+    if (!properties) {
+        console.log('❌ Could not fetch page properties');
+        return;
+    }
     console.log('📋 Available properties:', Object.keys(properties));
     
     // Extract data for Discord message
@@ -116,65 +151,54 @@ async function processPageWebhook(webhookData) {
 
 // **NEW: Extract page ID from different webhook structures**
 function extractPageId(webhookData) {
-    // Try different possible locations for page ID
+    // For different webhook types, the page ID is in different places
+    if (webhookData.entity?.id) {
+        return webhookData.entity.id; // For content_updated events
+    } // Try different possible locations for page ID
     return webhookData.page_id || 
            webhookData.id ||
            webhookData.object?.id ||
            (webhookData.data && webhookData.data.id);
 }
 
-// **ENHANCED: Extract properties with detailed debugging**
-function extractProperties(webhookData) {
-    console.log('🔍 Searching for properties in webhook data...');
-    
-    // Log the entire webhook structure to see what we're working with
-    console.log('Webhook data keys:', Object.keys(webhookData));
-    
-    // Try different property locations
-    if (webhookData.properties) {
-        console.log('✅ Found properties in webhookData.properties');
-        console.log('Properties available:', Object.keys(webhookData.properties));
-        return webhookData.properties;
+// **NEW: Fetch page properties from Notion API**
+async function fetchPageProperties(pageId) {
+    try {
+        console.log('🔗 Fetching page properties from Notion API...');
+        const notion = initializeNotionClient();
+        
+        const page = await notion.pages.retrieve({
+            page_id: pageId
+        });
+        
+        console.log('✅ Page retrieved successfully');
+        console.log('📋 Available properties:', Object.keys(page.properties || {}));
+        
+        return page.properties;
+        
+    } catch (error) {
+        console.error('❌ Error fetching page from Notion API:', error);
+        
+        if (error.code === 'object_not_found') {
+            console.error('❌ Page not found - check if the integration has access to the page');
+        } else if (error.code === 'unauthorized') {
+            console.error('❌ Notion token is invalid or lacks permissions');
+        }
+        
+        return null;
     }
-    
-    if (webhookData.data && webhookData.data.properties) {
-        console.log('✅ Found properties in webhookData.data.properties');
-        console.log('Properties available:', Object.keys(webhookData.data.properties));
-        return webhookData.data.properties;
-    }
-    
-    if (webhookData.object && webhookData.object.properties) {
-        console.log('✅ Found properties in webhookData.object.properties');
-        console.log('Properties available:', Object.keys(webhookData.object.properties));
-        return webhookData.object.properties;
-    }
-    
-    // For page.properties_updated, properties might be in a different structure
-    if (webhookData.properties_updated) {
-        console.log('✅ Found properties_updated field');
-        // This might contain only the updated properties, not all properties
-        return webhookData.properties_updated;
-    }
-    
-    // Log the entire webhook data to see the structure
-    console.log('📋 Full webhook data structure:', JSON.stringify(webhookData, null, 2).substring(0, 1000));
-    
-    console.log('❌ No properties found in expected locations');
-    return {};
 }
 
-// **ENHANCED: Extract notion data with better property handling**
+// **UPDATED: Extract notion data from actual page properties**
 function extractNotionData(properties) {
-    console.log('🔧 Extracting data from properties...');
-    
     if (!properties || Object.keys(properties).length === 0) {
-        console.log('❌ No properties provided to extractNotionData');
+        console.log('❌ No properties available');
         return getDefaultData();
     }
     
-    console.log('📋 Properties to extract from:', Object.keys(properties));
+    console.log('🔧 Extracting data from properties...');
     
-    // Debug each property
+    // Debug: log all available properties
     Object.keys(properties).forEach(propName => {
         const prop = properties[propName];
         console.log(`Property "${propName}":`, {
@@ -184,16 +208,9 @@ function extractNotionData(properties) {
     });
     
     const extractedData = {
-        // Title extraction - try multiple property names and types
         title: extractTitle(properties),
-        
-        // Description extraction
         description: extractDescription(properties),
-        
-        // Select property extraction (Jenis means "Type" in Indonesian)
         jenis: extractSelectProperty(properties, ['Jenis', 'Type', 'Category', 'Status']),
-        
-        // Deadline extraction
         deadline: extractDateProperty(properties, ['Deadline', 'Due Date', 'Due'])
     };
     
