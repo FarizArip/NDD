@@ -1,0 +1,10 @@
+[build]
+  publish = "."
+
+[[redirects]]
+  from = "/notion-webhook"
+  to = "/.netlify/functions/notion-webhook"
+  status = 200
+
+[functions]
+  node_bundle = true
