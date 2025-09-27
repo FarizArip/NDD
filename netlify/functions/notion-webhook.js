@@ -1,9 +1,13 @@
 // netlify/functions/notion-webhook.js
-const { Client: DiscordClient, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+const { Client: DiscordClient, GatewayIntentBits, EmbedBuilder, Events } = require('discord.js');
 const { Client: NotionClient } = require('@notionhq/client');
 
 let discordClient = null;
 let notionClient = null;
+
+const pageStateCache = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const processedPages = new Set(); // This will only work per function instance
 
 async function initializeDiscordClient() {
     if (!discordClient) {
@@ -11,8 +15,12 @@ async function initializeDiscordClient() {
             intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
         });
         
-        discordClient.on('ready', () => {
-            console.log('✅ Discord client ready!');
+        discordClient.on(Events.ClientReady, () => {
+            console.log('✅ Discord client ready! Logged in as:', discordClient.user.tag);
+        });
+        
+        discordClient.on('error', (error) => {
+            console.error('❌ Discord client error:', error);
         });
         
         await discordClient.login(process.env.DISCORD_TOKEN);
@@ -42,9 +50,34 @@ function verifyNotionWebhook(signature, body, secret) {
     return true; // Simplified for now
 }
 
-// Add at the top of your file (outside handler)
-const recentWebhooks = new Map(); // pageId -> timestamp
-const WEBHOOK_DEBOUNCE_TIME = 3000; // 3 seconds
+// **NEW: Extract page ID from different webhook structures**
+function extractPageId(webhookData) {
+    if (webhookData.entity?.id) {
+        return webhookData.entity.id;
+    }
+    return webhookData.page_id || webhookData.id || webhookData.object?.id;
+}
+
+// **NEW: Check if page belongs to target database**
+function isTargetDatabase(databaseId) {
+    if (!databaseId) {
+        console.log('❌ No database ID provided');
+        return false;
+    }
+    
+    const targetDatabaseId = process.env.TARGET_DATABASE_ID;
+    
+    if (!targetDatabaseId) {
+        console.log('⚠️ TARGET_DATABASE_ID not set, processing all pages');
+        return true;
+    }
+    
+    const normalizeId = (id) => id.replace(/-/g, '').toLowerCase();
+    const isTarget = normalizeId(databaseId) === normalizeId(targetDatabaseId);
+    
+    console.log(`📊 Database filter: ${databaseId} → ${isTarget ? '✅ PROCESS' : '🚫 SKIP'}`);
+    return isTarget;
+}
 
 exports.handler = async (event, context) => {
     console.log('=== NOTION WEBHOOK RECEIVED ===');
@@ -82,6 +115,12 @@ exports.handler = async (event, context) => {
             };
         }
 
+        // **NEW: Aggressive filtering at the top level**
+        if (shouldFilterWebhook(body)) {
+            console.log('🚫 Top-level filter: Skipping webhook');
+            return successResponse('Webhook filtered out');
+        }
+
         // **FIXED: Handle all page-related webhook types**
         if (isPageWebhook(body.type)) {
             console.log('🔄 Processing page webhook');
@@ -98,114 +137,46 @@ exports.handler = async (event, context) => {
     }
 };
 
-function shouldProcessWebhook(pageId, webhookType) {
-    const now = Date.now();
-    const key = `${pageId}_${webhookType}`;
+// **NEW: Top-level webhook filtering**
+function shouldFilterWebhook(webhookData) {
+    // Filter out certain webhook types entirely
+    const filteredTypes = ['page.content_updated'];
     
-    // Check if we recently processed a similar webhook
-    const lastProcessed = recentWebhooks.get(key);
+    if (filteredTypes.includes(webhookData.type)) {
+        console.log(`🚫 Filtering out ${webhookData.type} at top level`);
+        return true;
+    }
     
-    if (lastProcessed && (now - lastProcessed < WEBHOOK_DEBOUNCE_TIME)) {
-        console.log(`🚫 Debouncing: Skipping ${webhookType} for page ${pageId}`);
+    return false;
+}
+
+// **NEW: Simpler state management for serverless**
+const requestState = {
+    processedPages: new Set(),
+    startTime: Date.now()
+};
+
+function hasMeaningfulChanges(pageId, currentData) {
+    // Simple in-request state tracking
+    const key = `${pageId}_${currentData.title}_${currentData.content}`;
+    
+    if (requestState.processedPages.has(key)) {
+        console.log(`🚫 Already processed similar data for ${pageId} in this request`);
         return false;
     }
     
-    // Special case: ignore content_updated shortly after created
-    if (webhookType === 'page.content_updated') {
-        const createdKey = `${pageId}_page.created`;
-        const recentlyCreated = recentWebhooks.get(createdKey);
-        
-        if (recentlyCreated && (now - recentlyCreated < WEBHOOK_DEBOUNCE_TIME)) {
-            console.log(`🚫 Skipping content_updated (recently created): ${pageId}`);
-            return false;
-        }
-    }
-    
-    // Update the timestamp
-    recentWebhooks.set(key, now);
-    
-    // Clean up old entries
-    setTimeout(() => {
-        recentWebhooks.delete(key);
-    }, WEBHOOK_DEBOUNCE_TIME + 1000);
-    
+    requestState.processedPages.add(key);
     return true;
-}
-
-const pageStateCache = new Map();
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-
-function hasMeaningfulChanges(pageId, currentData) {
-    const previousState = pageStateCache.get(pageId);
-    const now = Date.now();
-    
-    // Clean up old cache entries
-    if (previousState && (now - previousState.timestamp > CACHE_TTL)) {
-        pageStateCache.delete(pageId);
-        return true; // Treat as meaningful change after cache expires
-    }
-    
-    // For new pages or first time seeing this page
-    if (!previousState) {
-        pageStateCache.set(pageId, {
-            title: currentData.title,
-            content: currentData.content,
-            jenis: currentData.jenis,
-            deadline: currentData.deadline,
-            timestamp: now
-        });
-        return true; // Always process new pages
-    }
-    
-    // Check for actual changes
-    const changes = [];
-    
-    if (previousState.title !== currentData.title) {
-        changes.push('title');
-    }
-    if (previousState.content !== currentData.content) {
-        changes.push('content');
-    }
-    if (previousState.jenis !== currentData.jenis) {
-        changes.push('jenis');
-    }
-    if (previousState.deadline !== currentData.deadline) {
-        changes.push('deadline');
-    }
-    
-    const hasChanges = changes.length > 0;
-    
-    if (hasChanges) {
-        console.log(`📊 Meaningful changes detected for ${pageId}:`, changes);
-        // Update cache with new state
-        pageStateCache.set(pageId, {
-            title: currentData.title,
-            content: currentData.content,
-            jenis: currentData.jenis,
-            deadline: currentData.deadline,
-            timestamp: now
-        });
-    } else {
-        console.log(`📊 No meaningful changes for ${pageId}`);
-    }
-    
-    return hasChanges;
 }
 
 // **NEW: Check if it's a page-related webhook**
 function isPageWebhook(webhookType) {
     const pageWebhookTypes = [
-        'page.created',
-        'page.updated', 
-        'page.properties_updated',
-        'page.content_updated',
-        'page.added_to_database',
-        'page.removed_from_database'
+        'page.created', 'page.updated', 'page.properties_updated',
+        'page.content_updated', 'page.added_to_database', 'page.removed_from_database'
     ];
     
-    return pageWebhookTypes.includes(webhookType) || 
-           webhookType === 'page_added' || // legacy type
-           webhookType === 'page_updated'; // legacy type
+    return pageWebhookTypes.includes(webhookType);
 }
 
 // Call it in your processPageWebhook function
@@ -218,25 +189,41 @@ async function processPageWebhook(webhookData) {
         console.log('❌ Could not extract page ID from webhook');
         return;
     }
+
+    console.log('📄 Page ID:', pageId);
     
-    // **NEW: Check if we should process this webhook**
     if (!shouldProcessWebhook(pageId, webhookData.type)) {
         return;
     }
 
-    console.log('📄 Page ID:', pageId);
-    
+    if (webhookData.type === 'page.content_updated') {
+    // Content updates often come in batches, be more aggressive with filtering
+    console.log('⚠️ Content update - applying aggressive filtering');
+    }
+
     const page = await fetchPage(pageId);
-    if (!page) return;
+    if (!page) {
+        console.log('❌ Could not fetch page');
+        return;
+    }
+
+    if (!page.parent || page.parent.type !== 'database_id') {
+        console.log('🚫 Skipping page - not a database page');
+        return;
+    }
 
     if (!isTargetDatabase(page.parent.database_id)) {
     console.log('🚫 Skipping page - not in target database');
     return;
     }
 
+    if (webhookData.type === 'page.created') {
+        console.log('⏳ Page creation detected, adding processing delay...');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
     // Extract properties - handle different webhook structures
     const properties = await fetchPageProperties(pageId);
-    
     if (!properties) {
         console.log('❌ Could not fetch page properties');
         return;
@@ -246,7 +233,7 @@ async function processPageWebhook(webhookData) {
     // Extract data for Discord message
     const notionData = await extractNotionData(properties, pageId);
     console.log('📊 Extracted data:', notionData);
-    
+
     if (!hasMeaningfulChanges(pageId, notionData)) {
         console.log(`🚫 No meaningful changes, skipping Discord message for ${pageId}`);
         return;
@@ -256,33 +243,17 @@ async function processPageWebhook(webhookData) {
     await sendToDiscord(pageId, notionData, webhookData.type);
 }
 
-// **Add periodic cache cleanup**
-setInterval(() => {
-    const now = Date.now();
-    let cleanedCount = 0;
+function shouldProcessWebhook(pageId, webhookType) {
+    const key = `${pageId}_${webhookType}`;
     
-    for (const [pageId, state] of pageStateCache.entries()) {
-        if (now - state.timestamp > CACHE_TTL) {
-            pageStateCache.delete(pageId);
-            cleanedCount++;
-        }
+    // Simple check for same request (works within single function execution)
+    if (processedPages.has(key)) {
+        console.log(`🚫 Already processing ${webhookType} for ${pageId} in this request`);
+        return false;
     }
     
-    if (cleanedCount > 0) {
-        console.log(`🧹 Cleaned up ${cleanedCount} old cache entries`);
-    }
-}, CACHE_TTL);
-
-// **NEW: Extract page ID from different webhook structures**
-function extractPageId(webhookData) {
-    // For different webhook types, the page ID is in different places
-    if (webhookData.entity?.id) {
-        return webhookData.entity.id; // For content_updated events
-    } // Try different possible locations for page ID
-    return webhookData.page_id || 
-           webhookData.id ||
-           webhookData.object?.id ||
-           (webhookData.data && webhookData.data.id);
+    processedPages.add(key);
+    return true;
 }
 
 // **NEW: Fetch page properties from Notion API**
@@ -454,23 +425,6 @@ async function fetchPage(pageId) {
     }
 }
 
-// **NEW: Check if page belongs to target database**
-function isTargetDatabase(databaseId) {
-    const targetDatabaseId = process.env.TARGET_DATABASE_ID; // "10df242906098142a428e51111d13ae4"
-    
-    if (!targetDatabaseId) {
-        console.log('⚠️ TARGET_DATABASE_ID not set, processing all pages');
-        return true;
-    }
-    
-    // Remove hyphens from both IDs for comparison
-    const normalizeId = (id) => id.replace(/-/g, '').toLowerCase();
-    const isTarget = normalizeId(databaseId) === normalizeId(targetDatabaseId);
-    
-    console.log(`📊 Database filter: ${databaseId} → ${isTarget ? '✅ PROCESS' : '🚫 SKIP'}`);
-    return isTarget;
-}
-
 // **NEW: Fetch blocks from Notion API**
 async function fetchPageBlocks(pageId) {
     const notion = initializeNotionClient();
@@ -638,6 +592,24 @@ function formatDeadline(deadlineString) {
         return 'Error formatting deadline';
     }
 }
+
+// **Add periodic cache cleanup**
+setInterval(() => {
+    const now = Date.now();
+    let cleanedCount = 0;
+    
+    for (const [pageId, state] of pageStateCache.entries()) {
+        if (now - state.timestamp > CACHE_TTL) {
+            pageStateCache.delete(pageId);
+            cleanedCount++;
+        }
+    }
+    
+    if (cleanedCount > 0) {
+        console.log(`🧹 Cleaned up ${cleanedCount} old cache entries`);
+    }
+}, CACHE_TTL);
+
 
 // Response helpers (keep your existing ones)
 function corsResponse() {
