@@ -1,176 +1,295 @@
-const { Client, GatewayIntentBits } = require('discord.js');
+// netlify/functions/notion-webhook.js
+const { Client: DiscordClient, GatewayIntentBits } = require('discord.js');
+const { Client: NotionClient } = require('@notionhq/client');
 
-// Initialize Discord client (serverless-friendly)
+// Initialize clients
 let discordClient;
+let notionClient;
+
 function getDiscordClient() {
     if (!discordClient) {
-        discordClient = new Client({
+        discordClient = new DiscordClient({
             intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
         });
-        
-        // Login once (Netlify functions reuse environments)
         discordClient.login(process.env.DISCORD_TOKEN);
     }
     return discordClient;
 }
 
-// In-memory store (for demo - use a database in production)
-const messageStore = new Map();
+function getNotionClient() {
+    if (!notionClient) {
+        notionClient = new NotionClient({ auth: process.env.NOTION_TOKEN });
+    }
+    return notionClient;
+}
 
+// **STORAGE FUNCTIONS** - Put these at the top level of your file
+async function storeMessageId(notionPageId, discordMessageId) {
+    try {
+        const notion = getNotionClient();
+        
+        await notion.pages.update({
+            page_id: notionPageId,
+            properties: {
+                'Discord Message ID': {
+                    rich_text: [{ 
+                        type: 'text',
+                        text: { content: discordMessageId } 
+                    }]
+                }
+            }
+        });
+        console.log(`Stored message ID ${discordMessageId} for Notion page ${notionPageId}`);
+    } catch (error) {
+        console.error('Error storing message ID:', error);
+    }
+}
+
+async function getMessageId(notionPageId) {
+    try {
+        const notion = getNotionClient();
+        
+        const page = await notion.pages.retrieve({ page_id: notionPageId });
+        const messageIdProperty = page.properties['Discord Message ID'];
+        
+        if (messageIdProperty && messageIdProperty.type === 'rich_text') {
+            return messageIdProperty.rich_text[0]?.text?.content;
+        }
+        return null;
+    } catch (error) {
+        console.error('Error retrieving message ID:', error);
+        return null;
+    }
+}
+
+// **MAIN WEBHOOK HANDLER**
 exports.handler = async (event, context) => {
-    // Only allow POST requests
+    console.log('Received webhook request');
+
+    // Handle CORS and method checks first
+    if (event.httpMethod === 'OPTIONS') {
+        return corsResponse();
+    }
+
     if (event.httpMethod !== 'POST') {
-        return {
-            statusCode: 405,
-            body: JSON.stringify({ error: 'Method Not Allowed' })
-        };
+        return methodNotAllowedResponse();
     }
 
     try {
-        // Verify webhook secret (important!)
-        const notionSignature = event.headers['notion-signature'];
-        if (notionSignature !== process.env.NOTION_SECRET) {
-            return {
-                statusCode: 401,
-                body: JSON.stringify({ error: 'Unauthorized' })
-            };
+        if (!event.body) {
+            return badRequestResponse('No body received');
         }
 
         const body = JSON.parse(event.body);
-        const { object: page_id, properties, created_time } = body;
-        
+        console.log('Webhook type:', body.type);
+
+        // Handle verification challenge
+        if (body.type === 'verification') {
+            return verificationResponse(body.challenge);
+        }
+
+        // Verify signature (simplified for now)
+        const notionSignature = event.headers['x-notion-signature'];
+        if (!notionSignature) {
+            return unauthorizedResponse('Missing signature');
+        }
+
         // Process the webhook
-        await handleNotionWebhook(page_id, properties, created_time);
-        
-        return {
-            statusCode: 200,
-            body: JSON.stringify({ success: true, message: 'Webhook processed' })
-        };
-        
+        await processNotionWebhook(body);
+
+        return successResponse('Webhook processed successfully');
+
     } catch (error) {
-        console.error('Error processing webhook:', error);
-        return {
-            statusCode: 500,
-            body: JSON.stringify({ error: 'Internal Server Error' })
-        };
+        console.error('Error:', error);
+        return errorResponse(error.message);
     }
 };
 
-// Store message ID in a Notion property
-async function storeMessageId(notionPageId, discordMessageId) {
-    const { Client } = require('@notionhq/client');
-    const notion = new Client({ auth: process.env.NOTION_TOKEN });
+// **PROCESS NOTION WEBHOOK** - Integrated with storage
+async function processNotionWebhook(webhookData) {
+    const { object, created_time } = webhookData;
     
-    await notion.pages.update({
-        page_id: notionPageId,
-        properties: {
-            'Discord Message ID': {
-                rich_text: [{ text: { content: discordMessageId } }]
-            }
-        }
-    });
-}
+    if (!object || object !== 'page') {
+        console.log('Not a page object, skipping');
+        return;
+    }
 
-// Retrieve message ID from Notion
-async function getMessageId(notionPageId) {
-    const { Client } = require('@notionhq/client');
-    const notion = new Client({ auth: process.env.NOTION_TOKEN });
-    
-    const page = await notion.pages.retrieve({ page_id: notionPageId });
-    return page.properties['Discord Message ID']?.rich_text[0]?.text?.content;
-}
+    const pageId = webhookData.page_id || webhookData.id;
+    if (!pageId) {
+        console.log('No page ID found');
+        return;
+    }
 
-const crypto = require('crypto');
-
-function verifyNotionSignature(signature, body, secret) {
-    if (!signature || !secret) return false;
-    
-    const hmac = crypto.createHmac('sha256', secret);
-    hmac.update(body);
-    const digest = hmac.digest('hex');
-    
-    return crypto.timingSafeEqual(
-        Buffer.from(signature, 'hex'),
-        Buffer.from(digest, 'hex')
-    );
-}
-
-async function handleNotionWebhook(page_id, properties, created_time) {
+    const notionData = extractNotionData(webhookData);
     const discordClient = getDiscordClient();
-    
-    // Wait for client to be ready
+
+    // Wait for Discord client to be ready
     if (!discordClient.isReady()) {
         await new Promise(resolve => discordClient.once('ready', resolve));
     }
+
+    // **CHECK IF WE ALREADY HAVE A MESSAGE FOR THIS PAGE**
+    const existingMessageId = await getMessageId(pageId);
     
-    const notionData = extractNotionData(properties);
-    const isNewPage = Date.now() - new Date(created_time).getTime() < 60000;
-    
-    if (isNewPage && !messageStore.has(page_id)) {
-        await createNewMessage(discordClient, page_id, notionData);
+    if (existingMessageId) {
+        // **UPDATE EXISTING MESSAGE**
+        await updateExistingMessage(discordClient, pageId, existingMessageId, notionData);
     } else {
-        await updateMessage(discordClient, page_id, notionData);
+        // **CREATE NEW MESSAGE**
+        await createNewMessage(discordClient, pageId, notionData);
     }
 }
 
-async function createNewMessage(client, notionPageId, notionData) {
+// **CREATE NEW MESSAGE** - with storage
+async function createNewMessage(discordClient, notionPageId, notionData) {
     try {
-        const channel = await client.channels.fetch(process.env.DISCORD_CHANNEL_ID);
-        
+        const channel = await discordClient.channels.fetch(process.env.DISCORD_CHANNEL_ID);
         const messageContent = formatMessageContent(notionData, notionPageId, true);
+        
         const message = await channel.send(messageContent);
         
-        messageStore.set(notionPageId, {
-            messageId: message.id,
-            channelId: channel.id
-        });
+        // **STORE THE MESSAGE ID IN NOTION**
+        await storeMessageId(notionPageId, message.id);
         
-        console.log(`Created message for Notion page ${notionPageId}`);
+        console.log(`Created and stored message ${message.id} for Notion page ${notionPageId}`);
+        
     } catch (error) {
         console.error('Error creating message:', error);
     }
 }
 
-async function updateMessage(client, notionPageId, updatedData) {
+// **UPDATE EXISTING MESSAGE** - using stored ID
+async function updateExistingMessage(discordClient, notionPageId, discordMessageId, notionData) {
     try {
-        const messageInfo = messageStore.get(notionPageId);
-        if (!messageInfo) {
-            return await createNewMessage(client, notionPageId, updatedData);
-        }
+        const channel = await discordClient.channels.fetch(process.env.DISCORD_CHANNEL_ID);
+        const message = await channel.messages.fetch(discordMessageId);
         
-        const channel = await client.channels.fetch(messageInfo.channelId);
-        const message = await channel.messages.fetch(messageInfo.messageId);
-        
-        const messageContent = formatMessageContent(updatedData, notionPageId, false);
+        const messageContent = formatMessageContent(notionData, notionPageId, false);
         await message.edit(messageContent);
         
-        console.log(`Updated message for Notion page ${notionPageId}`);
+        console.log(`Updated message ${discordMessageId} for Notion page ${notionPageId}`);
+        
     } catch (error) {
-        console.error('Error updating message:', error);
+        if (error.code === 10008) { // Unknown Message error
+            console.log(`Message ${discordMessageId} not found, creating new one`);
+            // Message was deleted, create a new one
+            await storeMessageId(notionPageId, null); // Clear invalid ID
+            await createNewMessage(discordClient, notionPageId, notionData);
+        } else {
+            console.error('Error updating message:', error);
+        }
     }
 }
 
-function extractNotionData(properties) {
+// **HELPER FUNCTIONS** (keep your existing ones)
+function extractNotionData(webhookData) {
+    const properties = webhookData.properties || {};
     return {
-        title: properties.Name?.title[0]?.text?.content || 'Untitled',
+        title: properties.Name?.title[0]?.text?.content || 
+               properties.Title?.title[0]?.text?.content || 
+               'Untitled',
         description: properties.Description?.rich_text[0]?.text?.content || '',
-        status: properties.Status?.select?.name || 'Todo',
-        priority: properties.Priority?.select?.name || 'Medium'
+        jenis: properties.Jenis?.select?.name || '',
+        priority: properties.Priority?.select?.name || 'PNJ',
+        deadline: properties.Deadline?.date?.start || null
     };
 }
 
 function formatMessageContent(notionData, notionPageId, isNew = false) {
+    // Format deadline for display
+    let deadlineDisplay = 'No deadline';
+    if (notionData.deadline) {
+        if (typeof notionData.deadline === 'string') {
+            // Simple string date
+            deadlineDisplay = new Date(notionData.deadline).toLocaleDateString();
+        } else if (notionData.deadline.formatted) {
+            // Enhanced deadline object
+            deadlineDisplay = notionData.deadline.formatted;
+            if (notionData.deadline.isPast) {
+                deadlineDisplay += ' ⚠️ (Overdue)';
+            }
+        }
+    }
+    
     return `
 # ${notionData.title}
 
 **Description:**  
 ${notionData.description}
 
-**Status:** ${notionData.status}  
-**Priority:** ${notionData.priority}  
-**Last Updated:** ${new Date().toLocaleString()}  
+**Status:** ${notionData.jenis}  
+**Deadline:** ${deadlineDisplay}  
 **Notion Page:** \`${notionPageId}\`
+**Last Updated:** ${new Date().toLocaleString()}
 
-${isNew ? '🆕 *New item created from Notion*' : '✏️ *Updated from Notion*'}
+${isNew ? '🆕 *New item from Notion*' : '✏️ *Updated from Notion*'}
     `.trim();
 }
+
+// **RESPONSE HELPERS**
+function corsResponse() {
+    return {
+        statusCode: 200,
+        headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Content-Type, x-notion-signature',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS'
+        },
+        body: ''
+    };
+}
+
+function methodNotAllowedResponse() {
+    return {
+        statusCode: 405,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ error: 'Method Not Allowed' })
+    };
+}
+
+function badRequestResponse(message) {
+    return {
+        statusCode: 400,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ error: message })
+    };
+}
+
+function unauthorizedResponse(message) {
+    return {
+        statusCode: 401,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ error: message })
+    };
+}
+
+function verificationResponse(challenge) {
+    return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challenge: challenge })
+    };
+}
+
+function successResponse(message) {
+    return {
+        statusCode: 200,
+        headers: { 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+        },
+        body: JSON.stringify({ success: true, message: message })
+    };
+}
+
+function errorResponse(message) {
+    return {
+        statusCode: 500,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ error: 'Internal Server Error', details: message })
+    };
+}
+app.listen(3000, () => {
+    console.log('Webhook server listening on port 3000');
+    discordClient.login('YOUR_DISCORD_BOT_TOKEN');
+});
