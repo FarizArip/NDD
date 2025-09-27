@@ -80,6 +80,21 @@ async function getMessageId(notionPageId) {
     return page.properties['Discord Message ID']?.rich_text[0]?.text?.content;
 }
 
+const crypto = require('crypto');
+
+function verifyNotionSignature(signature, body, secret) {
+    if (!signature || !secret) return false;
+    
+    const hmac = crypto.createHmac('sha256', secret);
+    hmac.update(body);
+    const digest = hmac.digest('hex');
+    
+    return crypto.timingSafeEqual(
+        Buffer.from(signature, 'hex'),
+        Buffer.from(digest, 'hex')
+    );
+}
+
 async function handleNotionWebhook(page_id, properties, created_time) {
     const discordClient = getDiscordClient();
     
