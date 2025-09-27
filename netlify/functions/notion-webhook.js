@@ -181,25 +181,6 @@ function shouldFilterWebhook(webhookData) {
     return false;
 }
 
-// **NEW: Simpler state management for serverless**
-const requestState = {
-    processedPages: new Set(),
-    startTime: Date.now()
-};
-
-function hasMeaningfulChanges(pageId, currentData) {
-    // Simple in-request state tracking
-    const key = `${pageId}_${currentData.title}_${currentData.content}`;
-    
-    if (requestState.processedPages.has(key)) {
-        console.log(`🚫 Already processed similar data for ${pageId} in this request`);
-        return false;
-    }
-    
-    requestState.processedPages.add(key);
-    return true;
-}
-
 function hasRelevantChangesWithTracking(pageId, currentData, webhookType, changedProperties = []) {
     const previousState = pageStateCache.get(pageId);
     const now = Date.now();
@@ -397,11 +378,6 @@ async function processPageWebhook(webhookData) {
     const notionData = await extractNotionData(properties, pageId);
     console.log('📊 Extracted data:', notionData);
 
-    if (!hasMeaningfulChanges(pageId, notionData)) {
-        console.log(`🚫 No meaningful changes, skipping Discord message for ${pageId}`);
-        return;
-    }
-
     // **NEW: Enhanced change detection with property tracking**
     if (!hasRelevantChangesWithTracking(pageId, notionData, getChangedProperties(webhookData), webhookData.type)) {
         console.log(`🚫 No relevant changes, skipping Discord message for ${pageId}`);
@@ -476,15 +452,13 @@ async function extractNotionData(properties, pageId) {
     const deadline = extractDateProperty(properties, ['Deadline', 'Due Date', 'Due']);
     const priority = extractSelectProperty(properties, ['Priority']);
     const pageContent = await extractPageContent(pageId);
-    const discordMessageId = extractMessageId(properties);
 
     const extractedData = {
         title: title,
         content: pageContent,
         jenis: jenis,
         deadline: deadline,
-        priority: priority,
-        discordMessageId: discordMessageId
+        priority: priority
     };
     
     console.log('📊 Final extracted data:', extractedData);
@@ -690,15 +664,6 @@ function getDefaultData() {
     };
 }
 
-// **NEW: Extract Discord message ID from properties**
-function extractMessageId(properties) {
-    const messageIdProp = properties['Discord Message ID'];
-    if (messageIdProp?.type === 'rich_text' && messageIdProp.rich_text.length > 0) {
-        return messageIdProp.rich_text[0].plain_text;
-    }
-    return null;
-}
-
 // **STORE MESSAGE ID IN NOTION**
 async function storeMessageId(notionPageId, discordMessageId) {
     try {
@@ -757,8 +722,10 @@ async function sendToDiscord(pageId, notionData, webhookType) {
         const channel = await client.channels.fetch(process.env.DISCORD_CHANNEL_ID);
         const messageContent = formatMessageContent(notionData, pageId, webhookType);
         
-        // **TRY TO UPDATE EXISTING MESSAGE**
-        if (notionData.discordMessageId) {
+        // **CHECK BOTH SOURCES FOR MESSAGE ID**
+        const messageId = notionData.discordMessageId || await getStoredMessageId(pageId);
+
+        if (messageId) {
             try {
                 const message = await channel.messages.fetch(notionData.discordMessageId);
                 await message.edit(messageContent);
