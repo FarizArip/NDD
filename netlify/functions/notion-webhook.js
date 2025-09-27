@@ -123,6 +123,14 @@ async function processPageWebhook(webhookData) {
     
     console.log('📄 Page ID:', pageId);
     
+    const page = await fetchPage(pageId);
+    if (!page) return;
+
+    if (!isTargetDatabase(page.parent.database_id)) {
+    console.log('🚫 Skipping page - not in target database');
+    return;
+    }
+
     // Extract properties - handle different webhook structures
     const properties = await fetchPageProperties(pageId);
     
@@ -307,6 +315,35 @@ async function extractPageContent(pageId) {
         console.error('❌ Error extracting page content:', error);
         return 'Error loading content';
     }
+}
+
+// **NEW: Fetch complete page to get parent database info**
+async function fetchPage(pageId) {
+    try {
+        const notion = initializeNotionClient();
+        const page = await notion.pages.retrieve({ page_id: pageId });
+        return page;
+    } catch (error) {
+        console.error('❌ Error fetching page:', error);
+        return null;
+    }
+}
+
+// **NEW: Check if page belongs to target database**
+function isTargetDatabase(databaseId) {
+    const targetDatabaseId = process.env.TARGET_DATABASE_ID; // "10df242906098142a428e51111d13ae4"
+    
+    if (!targetDatabaseId) {
+        console.log('⚠️ TARGET_DATABASE_ID not set, processing all pages');
+        return true;
+    }
+    
+    // Remove hyphens from both IDs for comparison
+    const normalizeId = (id) => id.replace(/-/g, '').toLowerCase();
+    const isTarget = normalizeId(databaseId) === normalizeId(targetDatabaseId);
+    
+    console.log(`📊 Database filter: ${databaseId} → ${isTarget ? '✅ PROCESS' : '🚫 SKIP'}`);
+    return isTarget;
 }
 
 // **NEW: Fetch blocks from Notion API**
