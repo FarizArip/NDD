@@ -16,8 +16,15 @@ const TRANSMISSION_CONFIG = {
     disabledStatuses: ['Done', 'Cancelled', 'Out'], // Statuses that should NOT send messages
     
     // Only these property changes should trigger updates
-    relevantProperties: ['Assignment Name', 'Jenis', 'Deadline', 'Priority'],
+    relevantProperties: ['Assignment Name', 'Jenis', 'Deadline', 'Priority', 'Content'],
     
+    // Webhook types that should be processed
+    allowedWebhookTypes: [
+        'page.created',
+        'page.properties_updated',
+        'page.content_updated' // **NEW: Allow content updates**
+    ],
+
     // Property that controls transmission
     controlProperty: 'Priority' // or 'Transmit', 'Send to Discord', etc.
 };
@@ -152,37 +159,40 @@ exports.handler = async (event, context) => {
 
 // **NEW: Top-level webhook filtering**
 function shouldFilterWebhook(webhookData) {
-    // Filter out certain webhook types entirely
-    const filteredTypes = ['page.content_updated'];
+    // **CHANGED: Only filter out webhook types we don't want**
+    const filteredTypes = [
+        // Remove 'page.content_updated' from here
+        'page.added_to_database',
+        'page.removed_from_database'
+        // Add any other webhook types you want to ignore
+    ];
     
     if (filteredTypes.includes(webhookData.type)) {
         console.log(`🚫 Filtering out ${webhookData.type} at top level`);
+        return true;
+    }
+
+    // **NEW: Also check if this webhook type is allowed**
+    if (!TRANSMISSION_CONFIG.allowedWebhookTypes.includes(webhookData.type)) {
+        console.log(`🚫 Webhook type ${webhookData.type} not in allowed types`);
         return true;
     }
     
     return false;
 }
 
-// **NEW: Simpler state management for serverless**
-const requestState = {
-    processedPages: new Set(),
-    startTime: Date.now()
-};
-
-function hasMeaningfulChanges(pageId, currentData) {
-    // Simple in-request state tracking
-    const key = `${pageId}_${currentData.title}_${currentData.content}`;
+function hasRelevantChangesWithTracking(pageId, currentData, webhookType, changedProperties = []) {
     
-    if (requestState.processedPages.has(key)) {
-        console.log(`🚫 Already processed similar data for ${pageId} in this request`);
-        return false;
-    }
+    console.log('🔍 hasRelevantChangesWithTracking called with:', {
+    pageId,
+    webhookType,
+    changedPropertiesType: typeof changedProperties,
+    changedPropertiesValue: changedProperties
+    });
     
-    requestState.processedPages.add(key);
-    return true;
-}
-
-function hasRelevantChangesWithTracking(pageId, currentData, changedProperties = []) {
+    // **ADD THIS DEBUG LINE**
+    console.log('📊 changedProperties is Array?:', Array.isArray(changedProperties));
+    
     const previousState = pageStateCache.get(pageId);
     const now = Date.now();
     
@@ -202,6 +212,20 @@ function hasRelevantChangesWithTracking(pageId, currentData, changedProperties =
         return true;
     }
     
+    // **NEW: Special handling for content updates**
+    if (webhookType === 'page.content_updated') {
+        const contentChanged = previousState.content !== currentData.content;
+        console.log(`📝 Content change detected: ${contentChanged ? '✅ CHANGED' : '🚫 UNCHANGED'}`);
+        
+        if (contentChanged) {
+            pageStateCache.set(pageId, {
+                ...currentData,
+                timestamp: now
+            });
+        }
+        return contentChanged;
+    }
+
     // If we know what properties changed, check only those
     if (changedProperties.length > 0) {
         const hasRelevant = hasRelevantChanges(previousState, currentData, changedProperties);
@@ -242,13 +266,27 @@ function hasRelevantChangesWithTracking(pageId, currentData, changedProperties =
 
 // **NEW: Extract changed properties from webhook data**
 function getChangedProperties(webhookData) {
-    // For properties_updated events, Notion might send what changed
-    if (webhookData.properties_updated) {
-        return Object.keys(webhookData.properties_updated);
+    try {
+        // Check if properties_updated exists and is an object
+        if (webhookData.properties_updated && typeof webhookData.properties_updated === 'object') {
+            const keys = Object.keys(webhookData.properties_updated);
+            console.log(`📊 Changed properties detected:`, keys);
+            return keys;
+        }
+        
+        // For content_updated events, return a special indicator
+        if (webhookData.type === 'page.content_updated') {
+            console.log('📝 Content update - treating as relevant change');
+            return ['content']; // Special case for content updates
+        }
+        
+        console.log('📊 No specific changed properties detected');
+        return [];
+        
+    } catch (error) {
+        console.error('❌ Error getting changed properties:', error);
+        return [];
     }
-    
-    // Fallback: return empty array (we'll check all properties)
-    return [];
 }
 
 // **NEW: Check if page should be transmitted based on control property**
@@ -276,6 +314,12 @@ function shouldTransmitPage(properties) {
 
 // **NEW: Check if changes are relevant**
 function hasRelevantChanges(previousData, currentData, changedProperties = []) {
+    // **FIX: Ensure changedProperties is always an array**
+    if (!Array.isArray(changedProperties)) {
+        console.warn('⚠️ changedProperties is not an array, converting to empty array. Received:', typeof changedProperties, changedProperties);
+        changedProperties = [];
+    }
+    
     // If we don't know what changed, check all relevant properties
     if (changedProperties.length === 0) {
         const relevantProps = TRANSMISSION_CONFIG.relevantProperties;
@@ -305,7 +349,6 @@ function isPageWebhook(webhookType) {
     return pageWebhookTypes.includes(webhookType);
 }
 
-// Call it in your processPageWebhook function
 async function processPageWebhook(webhookData) {
     console.log('🔍 Processing page webhook:', webhookData.type);
     
@@ -343,10 +386,10 @@ async function processPageWebhook(webhookData) {
     return;
     }
 
-    if (webhookData.type === 'page.created') {
-        console.log('⏳ Page creation detected, adding processing delay...');
-        await new Promise(resolve => setTimeout(resolve, 1000));
-    }
+    //if (webhookData.type === 'page.created') {
+    //    console.log('⏳ Page creation detected, adding processing delay...');
+    //    await new Promise(resolve => setTimeout(resolve, 1000));
+    //}
 
     // Extract properties - handle different webhook structures
     const properties = await fetchPageProperties(pageId);
@@ -366,13 +409,8 @@ async function processPageWebhook(webhookData) {
     const notionData = await extractNotionData(properties, pageId);
     console.log('📊 Extracted data:', notionData);
 
-    if (!hasMeaningfulChanges(pageId, notionData)) {
-        console.log(`🚫 No meaningful changes, skipping Discord message for ${pageId}`);
-        return;
-    }
-
     // **NEW: Enhanced change detection with property tracking**
-    if (!hasRelevantChangesWithTracking(pageId, notionData, getChangedProperties(webhookData))) {
+    if (!hasRelevantChangesWithTracking(pageId, notionData, getChangedProperties(webhookData), webhookData.type)) {
         console.log(`🚫 No relevant changes, skipping Discord message for ${pageId}`);
         return;
     }
@@ -657,6 +695,52 @@ function getDefaultData() {
     };
 }
 
+// **STORE MESSAGE ID IN NOTION**
+async function storeMessageId(notionPageId, discordMessageId) {
+    try {
+        const notion = initializeNotionClient();
+        
+        await notion.pages.update({
+            page_id: notionPageId,
+            properties: {
+                'Discord Message ID': {
+                    type: 'rich_text',
+                    rich_text: [
+                        {
+                            type: 'text',
+                            text: { content: discordMessageId || '' }
+                        }
+                    ]
+                }
+            }
+        });
+        
+        console.log(`💾 Stored Discord message ID ${discordMessageId} for page ${notionPageId}`);
+        
+    } catch (error) {
+        console.error('❌ Error storing message ID:', error);
+    }
+}
+
+// **RETRIEVE MESSAGE ID FROM NOTION**
+async function getStoredMessageId(notionPageId) {
+    try {
+        const notion = initializeNotionClient();
+        const page = await notion.pages.retrieve({ page_id: notionPageId });
+        
+        const messageIdProperty = page.properties['Discord Message ID'];
+        if (messageIdProperty?.type === 'rich_text' && messageIdProperty.rich_text.length > 0) {
+            return messageIdProperty.rich_text[0].plain_text;
+        }
+        
+        return null;
+        
+    } catch (error) {
+        console.error('❌ Error retrieving message ID:', error);
+        return null;
+    }
+}
+
 // **UPDATED: Send to Discord**
 async function sendToDiscord(pageId, notionData, webhookType) {
     try {
@@ -669,11 +753,34 @@ async function sendToDiscord(pageId, notionData, webhookType) {
         const channel = await client.channels.fetch(process.env.DISCORD_CHANNEL_ID);
         const messageContent = formatMessageContent(notionData, pageId, webhookType);
         
-        console.log('📤 Sending message to Discord...');
+        // **CHECK BOTH SOURCES FOR MESSAGE ID**
+        const messageId = notionData.discordMessageId || await getStoredMessageId(pageId);
+
+        if (messageId) {
+            try {
+                const message = await channel.messages.fetch(notionData.discordMessageId);
+                await message.edit(messageContent);
+                console.log('✅ Existing message updated:', notionData.discordMessageId);
+                return;
+                
+            } catch (error) {
+                if (error.code === 10008) { // Unknown message (was deleted)
+                    console.log('🗑️ Message was deleted, creating new one');
+                    // Fall through to create new message
+                } else {
+                    throw error;
+                }
+            }
+        }
+        
+        // **CREATE NEW MESSAGE**
+        console.log('📤 Creating new Discord message...');
         const message = await channel.send(messageContent);
         
-        console.log('✅ Message sent successfully! ID:', message.id);
-        
+        // **STORE THE NEW MESSAGE ID**
+        await storeMessageId(pageId, message.id);
+        console.log('✅ New message created and stored:', message.id);
+
     } catch (error) {
         console.error('❌ Error sending to Discord:', error);
     }
