@@ -200,7 +200,7 @@ function hasMeaningfulChanges(pageId, currentData) {
     return true;
 }
 
-function hasRelevantChangesWithTracking(pageId, currentData, changedProperties = []) {
+function hasRelevantChangesWithTracking(pageId, currentData, webhookType, changedProperties = []) {
     const previousState = pageStateCache.get(pageId);
     const now = Date.now();
     
