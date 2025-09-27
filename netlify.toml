@@ -7,4 +7,9 @@
   status = 200
 
 [functions]
-  node_bundle = true
+  # Remove the incorrect node_bundle line
+  # node_bundle = true  # ← This is wrong
+
+# Optional: If you need to bundle specific modules
+[functions.node_bundle]
+  external_node_modules = ["discord.js", "@notionhq/client"]
