@@ -9,6 +9,19 @@ const pageStateCache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 const processedPages = new Set(); // This will only work per function instance
 
+// Add these configuration constants at the top
+const TRANSMISSION_CONFIG = {
+    // Only send messages when these select values are chosen
+    enabledStatuses: ['PNJ', 'Ulangan', 'Projek'], // Add your desired statuses
+    disabledStatuses: ['Done', 'Cancelled', 'Out'], // Statuses that should NOT send messages
+    
+    // Only these property changes should trigger updates
+    relevantProperties: ['Assignment Name', 'Jenis', 'Deadline', 'Priority'],
+    
+    // Property that controls transmission
+    controlProperty: 'Priority' // or 'Transmit', 'Send to Discord', etc.
+};
+
 async function initializeDiscordClient() {
     if (!discordClient) {
         discordClient = new DiscordClient({
@@ -169,6 +182,119 @@ function hasMeaningfulChanges(pageId, currentData) {
     return true;
 }
 
+function hasRelevantChangesWithTracking(pageId, currentData, changedProperties = []) {
+    const previousState = pageStateCache.get(pageId);
+    const now = Date.now();
+    
+    // Clean up old cache entries
+    if (previousState && (now - previousState.timestamp > CACHE_TTL)) {
+        pageStateCache.delete(pageId);
+        console.log('🔄 Cache expired, treating as new change');
+        return true;
+    }
+    
+    // For new pages, always process
+    if (!previousState) {
+        pageStateCache.set(pageId, {
+            ...currentData,
+            timestamp: now
+        });
+        return true;
+    }
+    
+    // If we know what properties changed, check only those
+    if (changedProperties.length > 0) {
+        const hasRelevant = hasRelevantChanges(previousState, currentData, changedProperties);
+        if (hasRelevant) {
+            pageStateCache.set(pageId, {
+                ...currentData,
+                timestamp: now
+            });
+        }
+        return hasRelevant;
+    }
+    
+    // Fallback: check all relevant properties
+    const relevantProps = TRANSMISSION_CONFIG.relevantProperties;
+    const changes = [];
+    
+    relevantProps.forEach(prop => {
+        const propKey = prop.toLowerCase().replace(' ', '_');
+        if (previousState[propKey] !== currentData[propKey]) {
+            changes.push(prop);
+        }
+    });
+    
+    const hasChanges = changes.length > 0;
+    
+    if (hasChanges) {
+        console.log(`📊 Relevant properties changed:`, changes);
+        pageStateCache.set(pageId, {
+            ...currentData,
+            timestamp: now
+        });
+    } else {
+        console.log(`📊 No relevant properties changed`);
+    }
+    
+    return hasChanges;
+}
+
+// **NEW: Extract changed properties from webhook data**
+function getChangedProperties(webhookData) {
+    // For properties_updated events, Notion might send what changed
+    if (webhookData.properties_updated) {
+        return Object.keys(webhookData.properties_updated);
+    }
+    
+    // Fallback: return empty array (we'll check all properties)
+    return [];
+}
+
+// **NEW: Check if page should be transmitted based on control property**
+function shouldTransmitPage(properties) {
+    const controlProp = properties[TRANSMISSION_CONFIG.controlProperty];
+    
+    // If no control property exists, default to sending (or not sending)
+    if (!controlProp) {
+        console.log(`⚠️ No "${TRANSMISSION_CONFIG.controlProperty}" property found, defaulting to transmit`);
+        return true; // or false depending on your preference
+    }
+    
+    if (controlProp.type === 'select' && controlProp.select?.name) {
+        const status = controlProp.select.name;
+        const shouldTransmit = TRANSMISSION_CONFIG.enabledStatuses.includes(status);
+        
+        console.log(`📊 Transmission check: "${status}" → ${shouldTransmit ? '✅ SEND' : '🚫 BLOCK'}`);
+        return shouldTransmit;
+    }
+    
+    // If control property exists but no value selected, default behavior
+    console.log(`⚠️ Control property exists but no value selected, defaulting to transmit`);
+    return true;
+}
+
+// **NEW: Check if changes are relevant**
+function hasRelevantChanges(previousData, currentData, changedProperties = []) {
+    // If we don't know what changed, check all relevant properties
+    if (changedProperties.length === 0) {
+        const relevantProps = TRANSMISSION_CONFIG.relevantProperties;
+        return relevantProps.some(prop => {
+            const previousValue = previousData[prop.toLowerCase().replace(' ', '_')];
+            const currentValue = currentData[prop.toLowerCase().replace(' ', '_')];
+            return previousValue !== currentValue;
+        });
+    }
+    
+    // Check if any changed property is relevant
+    const hasRelevantChange = changedProperties.some(prop => 
+        TRANSMISSION_CONFIG.relevantProperties.includes(prop)
+    );
+    
+    console.log(`📊 Relevant changes check: ${hasRelevantChange ? '✅ RELEVANT' : '🚫 IRRELEVANT'}`);
+    return hasRelevantChange;
+}
+
 // **NEW: Check if it's a page-related webhook**
 function isPageWebhook(webhookType) {
     const pageWebhookTypes = [
@@ -228,6 +354,12 @@ async function processPageWebhook(webhookData) {
         console.log('❌ Could not fetch page properties');
         return;
     }
+
+    if (!shouldTransmitPage(properties)) {
+    console.log(`🚫 Page transmission blocked by control property`);
+    return;
+    }
+
     console.log('📋 Available properties:', Object.keys(properties));
     
     // Extract data for Discord message
@@ -236,6 +368,12 @@ async function processPageWebhook(webhookData) {
 
     if (!hasMeaningfulChanges(pageId, notionData)) {
         console.log(`🚫 No meaningful changes, skipping Discord message for ${pageId}`);
+        return;
+    }
+
+    // **NEW: Enhanced change detection with property tracking**
+    if (!hasRelevantChangesWithTracking(pageId, notionData, getChangedProperties(webhookData))) {
+        console.log(`🚫 No relevant changes, skipping Discord message for ${pageId}`);
         return;
     }
 
@@ -303,15 +441,17 @@ async function extractNotionData(properties, pageId) {
     });
 
     const title = extractTitle(properties);
-    const jenis = extractSelectProperty(properties, ['Jenis', 'Category', 'Status']);
+    const jenis = extractSelectProperty(properties, ['Jenis', 'Category', 'Golongan']);
     const deadline = extractDateProperty(properties, ['Deadline', 'Due Date', 'Due']);
+    const priority = extractSelectProperty(properties, ['Priority']);
     const pageContent = await extractPageContent(pageId);
 
     const extractedData = {
         title: title,
         content: pageContent,
         jenis: jenis,
-        deadline: deadline
+        deadline: deadline,
+        priority: priority
     };
     
     console.log('📊 Final extracted data:', extractedData);
@@ -555,7 +695,7 @@ function formatMessageContent(notionData, pageId, webhookType) {
 
     // **NEW: Format content with proper line breaks**
     const formattedContent = notionData.content 
-        ? notionData.content.split('\n').map(line => line.trim() ? `> ${line}` : '').join('\n')
+        ? notionData.content.split('\n').map(line => line.trim() ? ` ${line}` : '').join('\n')
         : 'No content available';
     
     return `
@@ -564,7 +704,7 @@ function formatMessageContent(notionData, pageId, webhookType) {
 ${formattedContent}
 
 ### **__----- :calendar_spiral:  Deadline ${deadlineText}  :calendar_spiral: -----__**
-### **__----- ${isNew ? '🆕 *Tugas Baru*' : '✏️ *Tugas Update*'} -----__**
+### **__----- ${isNew ? '🆕 *Tugas Baru* 🆕' : '✏️ *Tugas Update* ✏️'} -----__**
     `.trim();
 } //**Page ID:** \`${pageId}\` // **Webhook Type:** ${webhookType}
 
