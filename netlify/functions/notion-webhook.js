@@ -1,72 +1,28 @@
 // netlify/functions/notion-webhook.js
-const { Client: DiscordClient, GatewayIntentBits } = require('discord.js');
-const { Client: NotionClient } = require('@notionhq/client');
+const { Client: DiscordClient, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 
-// Initialize clients
-let discordClient;
-let notionClient;
+let discordClient = null;
 
-function getDiscordClient() {
+async function initializeDiscordClient() {
     if (!discordClient) {
         discordClient = new DiscordClient({
             intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
         });
-        discordClient.login(process.env.DISCORD_TOKEN);
+        
+        discordClient.on('ready', () => {
+            console.log('✅ Discord client ready!');
+        });
+        
+        await discordClient.login(process.env.DISCORD_TOKEN);
     }
     return discordClient;
 }
 
-function getNotionClient() {
-    if (!notionClient) {
-        notionClient = new NotionClient({ auth: process.env.NOTION_TOKEN });
-    }
-    return notionClient;
-}
-
-// **STORAGE FUNCTIONS** - Put these at the top level of your file
-async function storeMessageId(notionPageId, discordMessageId) {
-    try {
-        const notion = getNotionClient();
-        
-        await notion.pages.update({
-            page_id: notionPageId,
-            properties: {
-                'Discord Message ID': {
-                    rich_text: [{ 
-                        type: 'text',
-                        text: { content: discordMessageId } 
-                    }]
-                }
-            }
-        });
-        console.log(`Stored message ID ${discordMessageId} for Notion page ${notionPageId}`);
-    } catch (error) {
-        console.error('Error storing message ID:', error);
-    }
-}
-
-async function getMessageId(notionPageId) {
-    try {
-        const notion = getNotionClient();
-        
-        const page = await notion.pages.retrieve({ page_id: notionPageId });
-        const messageIdProperty = page.properties['Discord Message ID'];
-        
-        if (messageIdProperty && messageIdProperty.type === 'rich_text') {
-            return messageIdProperty.rich_text[0]?.text?.content;
-        }
-        return null;
-    } catch (error) {
-        console.error('Error retrieving message ID:', error);
-        return null;
-    }
-}
-
-// **MAIN WEBHOOK HANDLER**
 exports.handler = async (event, context) => {
-    console.log('Received webhook request');
+    console.log('=== NOTION WEBHOOK RECEIVED ===');
+    console.log('Method:', event.httpMethod);
 
-    // Handle CORS and method checks first
+    // Handle CORS and method checks
     if (event.httpMethod === 'OPTIONS') {
         return corsResponse();
     }
@@ -81,134 +37,168 @@ exports.handler = async (event, context) => {
         }
 
         const body = JSON.parse(event.body);
-        console.log('Webhook type:', body.type);
+        console.log('📝 Webhook type:', body.type);
 
-        // Handle verification challenge
+        // Handle verification
         if (body.type === 'verification') {
-            return verificationResponse(body.challenge);
+            console.log('✅ Handling verification challenge');
+            return {
+                statusCode: 200,
+                body: JSON.stringify({ challenge: body.challenge })
+            };
         }
 
-        // Verify signature (simplified for now)
-        const notionSignature = event.headers['x-notion-signature'];
-        if (!notionSignature) {
-            return unauthorizedResponse('Missing signature');
+        // **FIXED: Handle all page-related webhook types**
+        if (isPageWebhook(body.type)) {
+            console.log('🔄 Processing page webhook');
+            await processPageWebhook(body);
+        } else {
+            console.log('ℹ️ Ignoring non-page webhook type:', body.type);
         }
 
-        // Process the webhook
-        await processNotionWebhook(body);
-
-        return successResponse('Webhook processed successfully');
+        return successResponse('Webhook processed');
 
     } catch (error) {
-        console.error('Error:', error);
+        console.error('❌ Error:', error);
         return errorResponse(error.message);
     }
 };
 
-// **PROCESS NOTION WEBHOOK** - Integrated with storage
-async function processNotionWebhook(webhookData) {
-    const { object, created_time } = webhookData;
+// **NEW: Check if it's a page-related webhook**
+function isPageWebhook(webhookType) {
+    const pageWebhookTypes = [
+        'page.created',
+        'page.updated', 
+        'page.properties_updated',
+        'page.content_updated',
+        'page.added_to_database',
+        'page.removed_from_database'
+    ];
     
-    if (!object || object !== 'page') {
-        console.log('Not a page object, skipping');
-        return;
-    }
+    return pageWebhookTypes.includes(webhookType) || 
+           webhookType === 'page_added' || // legacy type
+           webhookType === 'page_updated'; // legacy type
+}
 
-    const pageId = webhookData.page_id || webhookData.id;
+// **UPDATED: Process page webhooks**
+async function processPageWebhook(webhookData) {
+    console.log('🔍 Processing page webhook:', webhookData.type);
+    
+    // Extract page ID based on webhook type
+    const pageId = extractPageId(webhookData);
     if (!pageId) {
-        console.log('No page ID found');
+        console.log('❌ Could not extract page ID from webhook');
         return;
     }
-
-    const notionData = extractNotionData(webhookData);
-    const discordClient = getDiscordClient();
-
-    // Wait for Discord client to be ready
-    if (!discordClient.isReady()) {
-        await new Promise(resolve => discordClient.once('ready', resolve));
-    }
-
-    // **CHECK IF WE ALREADY HAVE A MESSAGE FOR THIS PAGE**
-    const existingMessageId = await getMessageId(pageId);
     
-    if (existingMessageId) {
-        // **UPDATE EXISTING MESSAGE**
-        await updateExistingMessage(discordClient, pageId, existingMessageId, notionData);
-    } else {
-        // **CREATE NEW MESSAGE**
-        await createNewMessage(discordClient, pageId, notionData);
-    }
+    console.log('📄 Page ID:', pageId);
+    
+    // Extract properties - handle different webhook structures
+    const properties = extractProperties(webhookData);
+    console.log('📋 Available properties:', Object.keys(properties));
+    
+    // Extract data for Discord message
+    const notionData = extractNotionData(properties);
+    console.log('📊 Extracted data:', notionData);
+    
+    // Send to Discord
+    await sendToDiscord(pageId, notionData, webhookData.type);
 }
 
-// **CREATE NEW MESSAGE** - with storage
-async function createNewMessage(discordClient, notionPageId, notionData) {
-    try {
-        const channel = await discordClient.channels.fetch(process.env.DISCORD_CHANNEL_ID);
-        const messageContent = formatMessageContent(notionData, notionPageId, true);
-        
-        const message = await channel.send(messageContent);
-        
-        // **STORE THE MESSAGE ID IN NOTION**
-        await storeMessageId(notionPageId, message.id);
-        
-        console.log(`Created and stored message ${message.id} for Notion page ${notionPageId}`);
-        
-    } catch (error) {
-        console.error('Error creating message:', error);
-    }
+// **NEW: Extract page ID from different webhook structures**
+function extractPageId(webhookData) {
+    // Try different possible locations for page ID
+    return webhookData.page_id || 
+           webhookData.id ||
+           webhookData.object?.id ||
+           (webhookData.data && webhookData.data.id);
 }
 
-// **UPDATE EXISTING MESSAGE** - using stored ID
-async function updateExistingMessage(discordClient, notionPageId, discordMessageId, notionData) {
-    try {
-        const channel = await discordClient.channels.fetch(process.env.DISCORD_CHANNEL_ID);
-        const message = await channel.messages.fetch(discordMessageId);
-        
-        const messageContent = formatMessageContent(notionData, notionPageId, false);
-        await message.edit(messageContent);
-        
-        console.log(`Updated message ${discordMessageId} for Notion page ${notionPageId}`);
-        
-    } catch (error) {
-        if (error.code === 10008) { // Unknown Message error
-            console.log(`Message ${discordMessageId} not found, creating new one`);
-            // Message was deleted, create a new one
-            await storeMessageId(notionPageId, null); // Clear invalid ID
-            await createNewMessage(discordClient, notionPageId, notionData);
-        } else {
-            console.error('Error updating message:', error);
-        }
+// **NEW: Extract properties from different webhook structures**
+function extractProperties(webhookData) {
+    // Try different property locations
+    if (webhookData.properties) {
+        return webhookData.properties; // Most common
     }
+    
+    if (webhookData.data?.properties) {
+        return webhookData.data.properties;
+    }
+    
+    if (webhookData.object?.properties) {
+        return webhookData.object.properties;
+    }
+    
+    console.log('⚠️ No properties found in webhook data');
+    return {};
 }
 
-// **HELPER FUNCTIONS** (keep your existing ones)
-function extractNotionData(webhookData) {
-    const properties = webhookData.properties || {};
+// **YOUR EXISTING extractNotionData FUNCTION**
+function extractNotionData(properties) {
+    console.log('🔧 Extracting data from properties...');
+    
+    // Debug: log all properties to see what's available
+    console.log('All properties:', Object.keys(properties));
+    
     return {
         title: properties.Name?.title[0]?.text?.content || 
                properties.Title?.title[0]?.text?.content || 
                'Untitled',
-        description: properties.Description?.rich_text[0]?.text?.content || '',
-        jenis: properties.Jenis?.select?.name || null,
-        priority: properties.Priority?.select?.name || 'PNJ',
-        deadline: properties.Deadline?.date?.start || null
+        description: properties.Description?.rich_text[0]?.text?.content || '',      
+        // Status with better debugging
+        jenis: extractSelectProperty(properties, ['Jenis', 'Status', 'State'], null),
+        
+        // Priority
+        priority: extractSelectProperty(properties, ['Priority', 'Importance'], 'PNJ'),
+        
+        // Deadline
+        deadline: properties.Deadline?.date?.start || 
+                  properties['Due Date']?.date?.start || 
+                  null
     };
 }
 
-function formatMessageContent(notionData, notionPageId, isNew = false) {
-    // Format deadline for display
-    let deadlineDisplay = 'No deadline';
-    if (notionData.deadline) {
-        if (typeof notionData.deadline === 'string') {
-            // Simple string date
-            deadlineDisplay = new Date(notionData.deadline).toLocaleDateString();
-        } else if (notionData.deadline.formatted) {
-            // Enhanced deadline object
-            deadlineDisplay = notionData.deadline.formatted;
-            if (notionData.deadline.isPast) {
-                deadlineDisplay += ' ⚠️ (Overdue)';
-            }
+// **NEW: Helper to extract select properties**
+function extractSelectProperty(properties, possibleNames, defaultValue) {
+    for (const propName of possibleNames) {
+        if (properties[propName]?.select?.name) {
+            console.log(`✅ Found select property "${propName}":`, properties[propName].select.name);
+            return properties[propName].select.name;
         }
+    }
+    console.log(`❌ No select property found from: ${possibleNames.join(', ')}`);
+    return defaultValue;
+}
+
+// **UPDATED: Send to Discord**
+async function sendToDiscord(pageId, notionData, webhookType) {
+    try {
+        const client = await initializeDiscordClient();
+        
+        if (!client.isReady()) {
+            await new Promise(resolve => client.once('ready', resolve));
+        }
+        
+        const channel = await client.channels.fetch(process.env.DISCORD_CHANNEL_ID);
+        const messageContent = formatMessageContent(notionData, pageId, webhookType);
+        
+        console.log('📤 Sending message to Discord...');
+        const message = await channel.send(messageContent);
+        
+        console.log('✅ Message sent successfully! ID:', message.id);
+        
+    } catch (error) {
+        console.error('❌ Error sending to Discord:', error);
+    }
+}
+
+// **UPDATED: Format message content**
+function formatMessageContent(notionData, pageId, webhookType) {
+    const isNew = webhookType.includes('.created') || webhookType.includes('_added');
+    
+    let deadlineText = 'No deadline';
+    if (notionData.deadline) {
+        deadlineText = new Date(notionData.deadline).toLocaleDateString();
     }
     
     return `
@@ -217,16 +207,16 @@ function formatMessageContent(notionData, notionPageId, isNew = false) {
 **Description:**  
 ${notionData.description}
 
-**Status:** ${notionData.jenis}  
-**Deadline:** ${deadlineDisplay}  
-**Notion Page:** \`${notionPageId}\`
-**Last Updated:** ${new Date().toLocaleString()}
+**Jenis:** ${notionData.jenis}
+**Deadline:** ${deadlineText}  
+**Page ID:** \`${pageId}\`
+**Webhook Type:** ${webhookType}
 
-${isNew ? '🆕 *New item from Notion*' : '✏️ *Updated from Notion*'}
+${isNew ? '🆕 *New page created in Notion*' : '✏️ *Page updated in Notion*'}
     `.trim();
 }
 
-// **RESPONSE HELPERS**
+// Response helpers (keep your existing ones)
 function corsResponse() {
     return {
         statusCode: 200,
@@ -255,29 +245,10 @@ function badRequestResponse(message) {
     };
 }
 
-function unauthorizedResponse(message) {
-    return {
-        statusCode: 401,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ error: message })
-    };
-}
-
-function verificationResponse(challenge) {
-    return {
-        statusCode: 200,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ challenge: challenge })
-    };
-}
-
 function successResponse(message) {
     return {
         statusCode: 200,
-        headers: { 
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ success: true, message: message })
     };
 }
