@@ -142,7 +142,7 @@ async function processPageWebhook(webhookData) {
     console.log('📋 Available properties:', Object.keys(properties));
     
     // Extract data for Discord message
-    const notionData = extractNotionData(properties);
+    const notionData = await extractNotionData(properties, pageId);
     console.log('📊 Extracted data:', notionData);
     
     // Send to Discord
@@ -190,7 +190,7 @@ async function fetchPageProperties(pageId) {
 }
 
 // **UPDATED: Extract notion data from actual page properties**
-function extractNotionData(properties) {
+async function extractNotionData(properties) {
     if (!properties || Object.keys(properties).length === 0) {
         console.log('❌ No properties available');
         return getDefaultData();
@@ -206,12 +206,19 @@ function extractNotionData(properties) {
             value: prop ? prop[prop.type] : 'undefined'
         });
     });
-    
+
+    const title = extractTitle(properties);
+    const description = extractDescription(properties);
+    const jenis = extractSelectProperty(properties, ['Jenis', 'Category', 'Status']);
+    const deadline = extractDateProperty(properties, ['Deadline', 'Due Date', 'Due']);
+    const pageContent = await extractPageContent(pageId);
+
     const extractedData = {
-        title: extractTitle(properties),
-        description: extractDescription(properties),
-        jenis: extractSelectProperty(properties, ['Jenis', 'Type', 'Category', 'Status']),
-        deadline: extractDateProperty(properties, ['Deadline', 'Due Date', 'Due'])
+        title: title,
+        description: description,
+        content: pageContent, // Use actual page content instead of description property
+        jenis: jenis,
+        deadline: deadline
     };
     
     console.log('📊 Final extracted data:', extractedData);
@@ -228,7 +235,8 @@ function extractTitle(properties) {
         { name: 'Task Name', type: 'title' },
         // Also try rich_text fields that might contain titles
         { name: 'Name', type: 'rich_text' },
-        { name: 'Title', type: 'rich_text' }
+        { name: 'Title', type: 'rich_text' },
+        { name: 'Assignment Name', type: 'rich_text' },
     ];
     
     for (const candidate of titleCandidates) {
@@ -247,6 +255,98 @@ function extractTitle(properties) {
     
     console.log('❌ No title found in properties');
     return 'Untitled';
+}
+
+// **NEW: Extract page content from blocks**
+async function extractPageContent(pageId) {
+    try {
+        console.log('📖 Fetching page content...');
+        const blocks = await fetchPageBlocks(pageId);
+        
+        if (!blocks || blocks.length === 0) {
+            return 'No content available';
+        }
+        
+        let content = '';
+        let contentLength = 0;
+        const maxLength = 1000; // Discord character limit
+        
+        // Process each block
+        for (const block of blocks) {
+            if (contentLength >= maxLength) break;
+            
+            const blockText = extractTextFromBlock(block);
+            if (blockText && contentLength + blockText.length <= maxLength) {
+                content += blockText + '\n';
+                contentLength += blockText.length;
+            }
+        }
+        
+        // Trim and add ellipsis if content was truncated
+        content = content.trim();
+        if (contentLength >= maxLength) {
+            content += '...';
+        }
+        
+        console.log(`✅ Extracted ${contentLength} characters of content`);
+        return content || 'No text content';
+        
+    } catch (error) {
+        console.error('❌ Error extracting page content:', error);
+        return 'Error loading content';
+    }
+}
+
+// **NEW: Fetch blocks from Notion API**
+async function fetchPageBlocks(pageId) {
+    const notion = initializeNotionClient();
+    
+    const response = await notion.blocks.children.list({
+        block_id: pageId,
+        page_size: 20 // Limit to first 20 blocks for performance
+    });
+    
+    return response.results;
+}
+
+// **NEW: Extract text from a single block**
+function extractTextFromBlock(block) {
+    if (!block || !block.type) return '';
+    
+    const blockType = block.type;
+    const blockData = block[blockType];
+    
+    if (!blockData.rich_text || blockData.rich_text.length === 0) {
+        return '';
+    }
+    
+    // Extract all rich text segments
+    let text = '';
+    for (const richText of blockData.rich_text) {
+        if (richText.plain_text) {
+            text += richText.plain_text;
+        }
+    }
+    
+    // Format based on block type
+    switch (blockType) {
+        case 'heading_1':
+            return `# ${text}`;
+        case 'heading_2':
+            return `## ${text}`;
+        case 'heading_3':
+            return `### ${text}`;
+        case 'bulleted_list_item':
+            return `• ${text}`;
+        case 'numbered_list_item':
+            return `1. ${text}`;
+        case 'to_do':
+            const checked = blockData.checked ? '✅' : '☐';
+            return `${checked} ${text}`;
+        case 'paragraph':
+        default:
+            return text;
+    }
 }
 
 function extractDescription(properties) {
@@ -345,12 +445,17 @@ function formatMessageContent(notionData, pageId, webhookType) {
     if (notionData.jenis) {
         jenisText = notionData.jenis;
     }
+
+    // **NEW: Format content with proper line breaks**
+    const formattedContent = notionData.content 
+        ? notionData.content.split('\n').map(line => line.trim() ? `> ${line}` : '').join('\n')
+        : 'No content available';
     
     return `
 # ${notionData.title}
 
-**Description:**  
-${notionData.description}
+**Content:**  
+${formattedContent}
 
 **Jenis:** ${jenisText}
 **Deadline:** ${deadlineText}  
