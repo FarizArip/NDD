@@ -189,7 +189,7 @@ function extractNotionData(webhookData) {
                properties.Title?.title[0]?.text?.content || 
                'Untitled',
         description: properties.Description?.rich_text[0]?.text?.content || '',
-        jenis: properties.Jenis?.select?.name || '',
+        jenis: properties.Jenis?.select?.name || null,
         priority: properties.Priority?.select?.name || 'PNJ',
         deadline: properties.Deadline?.date?.start || null
     };
@@ -289,7 +289,3 @@ function errorResponse(message) {
         body: JSON.stringify({ error: 'Internal Server Error', details: message })
     };
 }
-app.listen(3000, () => {
-    console.log('Webhook server listening on port 3000');
-    discordClient.login('YOUR_DISCORD_BOT_TOKEN');
-});
