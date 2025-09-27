@@ -110,18 +110,9 @@ function isPageWebhook(webhookType) {
            webhookType === 'page_updated'; // legacy type
 }
 
-function logCompleteWebhookStructure(webhookData) {
-    console.log('=== COMPLETE WEBHOOK STRUCTURE ===');
-    console.log(JSON.stringify(webhookData, null, 2));
-    console.log('=== END WEBHOOK STRUCTURE ===');
-}
-
 // Call it in your processPageWebhook function
 async function processPageWebhook(webhookData) {
     console.log('🔍 Processing page webhook:', webhookData.type);
-    
-    // **TEMPORARY: Log the complete structure**
-    logCompleteWebhookStructure(webhookData);
     
     // Extract page ID based on webhook type
     const pageId = extractPageId(webhookData);
@@ -190,7 +181,7 @@ async function fetchPageProperties(pageId) {
 }
 
 // **UPDATED: Extract notion data from actual page properties**
-async function extractNotionData(properties) {
+async function extractNotionData(properties, pageId) {
     if (!properties || Object.keys(properties).length === 0) {
         console.log('❌ No properties available');
         return getDefaultData();
@@ -208,15 +199,13 @@ async function extractNotionData(properties) {
     });
 
     const title = extractTitle(properties);
-    const description = extractDescription(properties);
     const jenis = extractSelectProperty(properties, ['Jenis', 'Category', 'Status']);
     const deadline = extractDateProperty(properties, ['Deadline', 'Due Date', 'Due']);
     const pageContent = await extractPageContent(pageId);
 
     const extractedData = {
         title: title,
-        description: description,
-        content: pageContent, // Use actual page content instead of description property
+        content: pageContent,
         jenis: jenis,
         deadline: deadline
     };
@@ -227,29 +216,52 @@ async function extractNotionData(properties) {
 
 // **NEW: Specialized extraction functions**
 function extractTitle(properties) {
+    console.log('🔍 Searching for title property...');
+    
+        // Try specific property names first
+    const specificCandidates = [
+        'Assignment Name', // Your actual property name
+        'Name', 
+        'Title', 
+        'Task Name'
+    ];
+
     // Try different title property names and types
     const titleCandidates = [
+        { name: 'Assignment Name', type: 'title' }, // Add this first since it exists
         { name: 'Name', type: 'title' },
         { name: 'Title', type: 'title' },
         { name: 'Task', type: 'title' },
         { name: 'Task Name', type: 'title' },
-        // Also try rich_text fields that might contain titles
-        { name: 'Name', type: 'rich_text' },
-        { name: 'Title', type: 'rich_text' },
-        { name: 'Assignment Name', type: 'rich_text' },
     ];
     
+    for (const propName of specificCandidates) {
+        const prop = properties[propName];
+        if (prop && prop.type === 'title' && prop.title?.[0]?.text?.content) {
+            console.log(`✅ Found title in "${propName}":`, prop.title[0].text.content);
+            return prop.title[0].text.content;
+        }
+    }
+
     for (const candidate of titleCandidates) {
         const prop = properties[candidate.name];
+        console.log(`Checking "${candidate.name}":`, prop ? 'exists' : 'not found');
+        
         if (prop && prop.type === candidate.type) {
             if (candidate.type === 'title' && prop.title?.[0]?.text?.content) {
                 console.log(`✅ Found title in "${candidate.name}.title":`, prop.title[0].text.content);
                 return prop.title[0].text.content;
             }
-            if (candidate.type === 'rich_text' && prop.rich_text?.[0]?.text?.content) {
-                console.log(`✅ Found title in "${candidate.name}.rich_text":`, prop.rich_text[0].text.content);
-                return prop.rich_text[0].text.content;
-            }
+        }
+    }
+    
+    // If no title property found, try to find any title-like property
+    console.log('🔍 Searching for any title property...');
+    for (const propName in properties) {
+        const prop = properties[propName];
+        if (prop.type === 'title' && prop.title?.[0]?.text?.content) {
+            console.log(`✅ Found title in "${propName}":`, prop.title[0].text.content);
+            return prop.title[0].text.content;
         }
     }
     
@@ -349,27 +361,6 @@ function extractTextFromBlock(block) {
     }
 }
 
-function extractDescription(properties) {
-    const descCandidates = ['Description', 'Notes', 'Details', 'Content'];
-    
-    for (const propName of descCandidates) {
-        const prop = properties[propName];
-        if (prop) {
-            if (prop.type === 'rich_text' && prop.rich_text?.[0]?.text?.content) {
-                console.log(`✅ Found description in "${propName}":`, prop.rich_text[0].text.content);
-                return prop.rich_text[0].text.content;
-            }
-            if (prop.type === 'title' && prop.title?.[0]?.text?.content) {
-                console.log(`✅ Found description in "${propName}.title":`, prop.title[0].text.content);
-                return prop.title[0].text.content;
-            }
-        }
-    }
-    
-    console.log('❌ No description found');
-    return '';
-}
-
 function extractSelectProperty(properties, possibleNames) {
     for (const propName of possibleNames) {
         const prop = properties[propName];
@@ -404,7 +395,7 @@ function extractDateProperty(properties, possibleNames) {
 function getDefaultData() {
     return {
         title: 'Untitled',
-        description: '',
+        content: '',
         jenis: null,
         deadline: null
     };
