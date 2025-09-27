@@ -80,9 +80,18 @@ function isPageWebhook(webhookType) {
            webhookType === 'page_updated'; // legacy type
 }
 
-// **UPDATED: Process page webhooks**
+function logCompleteWebhookStructure(webhookData) {
+    console.log('=== COMPLETE WEBHOOK STRUCTURE ===');
+    console.log(JSON.stringify(webhookData, null, 2));
+    console.log('=== END WEBHOOK STRUCTURE ===');
+}
+
+// Call it in your processPageWebhook function
 async function processPageWebhook(webhookData) {
     console.log('🔍 Processing page webhook:', webhookData.type);
+    
+    // **TEMPORARY: Log the complete structure**
+    logCompleteWebhookStructure(webhookData);
     
     // Extract page ID based on webhook type
     const pageId = extractPageId(webhookData);
@@ -114,60 +123,174 @@ function extractPageId(webhookData) {
            (webhookData.data && webhookData.data.id);
 }
 
-// **NEW: Extract properties from different webhook structures**
+// **ENHANCED: Extract properties with detailed debugging**
 function extractProperties(webhookData) {
+    console.log('🔍 Searching for properties in webhook data...');
+    
+    // Log the entire webhook structure to see what we're working with
+    console.log('Webhook data keys:', Object.keys(webhookData));
+    
     // Try different property locations
     if (webhookData.properties) {
-        return webhookData.properties; // Most common
+        console.log('✅ Found properties in webhookData.properties');
+        console.log('Properties available:', Object.keys(webhookData.properties));
+        return webhookData.properties;
     }
     
-    if (webhookData.data?.properties) {
+    if (webhookData.data && webhookData.data.properties) {
+        console.log('✅ Found properties in webhookData.data.properties');
+        console.log('Properties available:', Object.keys(webhookData.data.properties));
         return webhookData.data.properties;
     }
     
-    if (webhookData.object?.properties) {
+    if (webhookData.object && webhookData.object.properties) {
+        console.log('✅ Found properties in webhookData.object.properties');
+        console.log('Properties available:', Object.keys(webhookData.object.properties));
         return webhookData.object.properties;
     }
     
-    console.log('⚠️ No properties found in webhook data');
+    // For page.properties_updated, properties might be in a different structure
+    if (webhookData.properties_updated) {
+        console.log('✅ Found properties_updated field');
+        // This might contain only the updated properties, not all properties
+        return webhookData.properties_updated;
+    }
+    
+    // Log the entire webhook data to see the structure
+    console.log('📋 Full webhook data structure:', JSON.stringify(webhookData, null, 2).substring(0, 1000));
+    
+    console.log('❌ No properties found in expected locations');
     return {};
 }
 
-// **YOUR EXISTING extractNotionData FUNCTION**
+// **ENHANCED: Extract notion data with better property handling**
 function extractNotionData(properties) {
     console.log('🔧 Extracting data from properties...');
     
-    // Debug: log all properties to see what's available
-    console.log('All properties:', Object.keys(properties));
+    if (!properties || Object.keys(properties).length === 0) {
+        console.log('❌ No properties provided to extractNotionData');
+        return getDefaultData();
+    }
     
-    return {
-        title: properties.Name?.title[0]?.text?.content || 
-               properties.Title?.title[0]?.text?.content || 
-               'Untitled',
-        description: properties.Description?.rich_text[0]?.text?.content || '',      
-        // Status with better debugging
-        jenis: extractSelectProperty(properties, ['Jenis', 'Status', 'State'], null),
+    console.log('📋 Properties to extract from:', Object.keys(properties));
+    
+    // Debug each property
+    Object.keys(properties).forEach(propName => {
+        const prop = properties[propName];
+        console.log(`Property "${propName}":`, {
+            type: prop?.type,
+            value: prop ? prop[prop.type] : 'undefined'
+        });
+    });
+    
+    const extractedData = {
+        // Title extraction - try multiple property names and types
+        title: extractTitle(properties),
         
-        // Priority
-        priority: extractSelectProperty(properties, ['Priority', 'Importance'], 'PNJ'),
+        // Description extraction
+        description: extractDescription(properties),
         
-        // Deadline
-        deadline: properties.Deadline?.date?.start || 
-                  properties['Due Date']?.date?.start || 
-                  null
+        // Select property extraction (Jenis means "Type" in Indonesian)
+        jenis: extractSelectProperty(properties, ['Jenis', 'Type', 'Category', 'Status']),
+        
+        // Deadline extraction
+        deadline: extractDateProperty(properties, ['Deadline', 'Due Date', 'Due'])
     };
+    
+    console.log('📊 Final extracted data:', extractedData);
+    return extractedData;
 }
 
-// **NEW: Helper to extract select properties**
-function extractSelectProperty(properties, possibleNames, defaultValue) {
-    for (const propName of possibleNames) {
-        if (properties[propName]?.select?.name) {
-            console.log(`✅ Found select property "${propName}":`, properties[propName].select.name);
-            return properties[propName].select.name;
+// **NEW: Specialized extraction functions**
+function extractTitle(properties) {
+    // Try different title property names and types
+    const titleCandidates = [
+        { name: 'Name', type: 'title' },
+        { name: 'Title', type: 'title' },
+        { name: 'Task', type: 'title' },
+        { name: 'Task Name', type: 'title' },
+        // Also try rich_text fields that might contain titles
+        { name: 'Name', type: 'rich_text' },
+        { name: 'Title', type: 'rich_text' }
+    ];
+    
+    for (const candidate of titleCandidates) {
+        const prop = properties[candidate.name];
+        if (prop && prop.type === candidate.type) {
+            if (candidate.type === 'title' && prop.title?.[0]?.text?.content) {
+                console.log(`✅ Found title in "${candidate.name}.title":`, prop.title[0].text.content);
+                return prop.title[0].text.content;
+            }
+            if (candidate.type === 'rich_text' && prop.rich_text?.[0]?.text?.content) {
+                console.log(`✅ Found title in "${candidate.name}.rich_text":`, prop.rich_text[0].text.content);
+                return prop.rich_text[0].text.content;
+            }
         }
     }
+    
+    console.log('❌ No title found in properties');
+    return 'Untitled';
+}
+
+function extractDescription(properties) {
+    const descCandidates = ['Description', 'Notes', 'Details', 'Content'];
+    
+    for (const propName of descCandidates) {
+        const prop = properties[propName];
+        if (prop) {
+            if (prop.type === 'rich_text' && prop.rich_text?.[0]?.text?.content) {
+                console.log(`✅ Found description in "${propName}":`, prop.rich_text[0].text.content);
+                return prop.rich_text[0].text.content;
+            }
+            if (prop.type === 'title' && prop.title?.[0]?.text?.content) {
+                console.log(`✅ Found description in "${propName}.title":`, prop.title[0].text.content);
+                return prop.title[0].text.content;
+            }
+        }
+    }
+    
+    console.log('❌ No description found');
+    return '';
+}
+
+function extractSelectProperty(properties, possibleNames) {
+    for (const propName of possibleNames) {
+        const prop = properties[propName];
+        if (prop && prop.type === 'select') {
+            if (prop.select?.name) {
+                console.log(`✅ Found select property "${propName}":`, prop.select.name);
+                return prop.select.name;
+            } else if (prop.select === null) {
+                console.log(`✅ Select property "${propName}" exists but no value selected`);
+                return 'Not selected';
+            }
+        }
+    }
+    
     console.log(`❌ No select property found from: ${possibleNames.join(', ')}`);
-    return defaultValue;
+    return null;
+}
+
+function extractDateProperty(properties, possibleNames) {
+    for (const propName of possibleNames) {
+        const prop = properties[propName];
+        if (prop && prop.type === 'date' && prop.date?.start) {
+            console.log(`✅ Found date property "${propName}":`, prop.date.start);
+            return prop.date.start;
+        }
+    }
+    
+    console.log(`❌ No date property found from: ${possibleNames.join(', ')}`);
+    return null;
+}
+
+function getDefaultData() {
+    return {
+        title: 'Untitled',
+        description: '',
+        jenis: null,
+        deadline: null
+    };
 }
 
 // **UPDATED: Send to Discord**
@@ -200,6 +323,11 @@ function formatMessageContent(notionData, pageId, webhookType) {
     if (notionData.deadline) {
         deadlineText = new Date(notionData.deadline).toLocaleDateString();
     }
+
+    let jenisText = 'Not set';
+    if (notionData.jenis) {
+        jenisText = notionData.jenis;
+    }
     
     return `
 # ${notionData.title}
@@ -207,7 +335,7 @@ function formatMessageContent(notionData, pageId, webhookType) {
 **Description:**  
 ${notionData.description}
 
-**Jenis:** ${notionData.jenis}
+**Jenis:** ${jenisText}
 **Deadline:** ${deadlineText}  
 **Page ID:** \`${pageId}\`
 **Webhook Type:** ${webhookType}
