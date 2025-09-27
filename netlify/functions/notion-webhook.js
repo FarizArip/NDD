@@ -466,7 +466,7 @@ function formatMessageContent(notionData, pageId, webhookType) {
     
     let deadlineText = 'No deadline';
     if (notionData.deadline) {
-        deadlineText = new Date(notionData.deadline).toLocaleDateString();
+        deadlineText = formatDeadline(notionData.deadline);
     }
 
     let jenisText = 'Not set';
@@ -480,18 +480,38 @@ function formatMessageContent(notionData, pageId, webhookType) {
         : 'No content available';
     
     return `
-# ${notionData.title}
+# **__----- :sparkles: ${notionData.title} (I${jenisText}) :sparkles: -----__**
 
-**Content:**  
 ${formattedContent}
 
-**Jenis:** ${jenisText}
-**Deadline:** ${deadlineText}  
-**Page ID:** \`${pageId}\`
-**Webhook Type:** ${webhookType}
-
-${isNew ? '🆕 *New page created in Notion*' : '✏️ *Page updated in Notion*'}
+### **__----- :calendar_spiral:  Deadline ${deadlineText}  :calendar_spiral:  -----__**
+### ${isNew ? '🆕 *Tugas Baru*' : '✏️ *Tugas Update*'}
     `.trim();
+} //**Page ID:** \`${pageId}\` // **Webhook Type:** ${webhookType}
+
+// **ADD THIS NEW FUNCTION:**
+function formatDeadline(deadlineString) {
+    if (!deadlineString) return 'No deadline';
+    
+    try {
+        const date = new Date(deadlineString);
+        
+        // Check if date is valid
+        if (isNaN(date.getTime())) {
+            return 'Invalid deadline';
+        }
+        
+        // Format: "Saturday, September 27, 2025"
+        return date.toLocaleDateString('id-ID', {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+        });
+    } catch (error) {
+        console.error('Error formatting deadline:', error);
+        return 'Error formatting deadline';
+    }
 }
 
 // Response helpers (keep your existing ones)
