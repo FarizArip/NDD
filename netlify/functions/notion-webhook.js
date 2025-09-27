@@ -42,6 +42,10 @@ function verifyNotionWebhook(signature, body, secret) {
     return true; // Simplified for now
 }
 
+// Add at the top of your file (outside handler)
+const recentWebhooks = new Map(); // pageId -> timestamp
+const WEBHOOK_DEBOUNCE_TIME = 3000; // 3 seconds
+
 exports.handler = async (event, context) => {
     console.log('=== NOTION WEBHOOK RECEIVED ===');
     console.log('Method:', event.httpMethod);
@@ -94,6 +98,100 @@ exports.handler = async (event, context) => {
     }
 };
 
+function shouldProcessWebhook(pageId, webhookType) {
+    const now = Date.now();
+    const key = `${pageId}_${webhookType}`;
+    
+    // Check if we recently processed a similar webhook
+    const lastProcessed = recentWebhooks.get(key);
+    
+    if (lastProcessed && (now - lastProcessed < WEBHOOK_DEBOUNCE_TIME)) {
+        console.log(`🚫 Debouncing: Skipping ${webhookType} for page ${pageId}`);
+        return false;
+    }
+    
+    // Special case: ignore content_updated shortly after created
+    if (webhookType === 'page.content_updated') {
+        const createdKey = `${pageId}_page.created`;
+        const recentlyCreated = recentWebhooks.get(createdKey);
+        
+        if (recentlyCreated && (now - recentlyCreated < WEBHOOK_DEBOUNCE_TIME)) {
+            console.log(`🚫 Skipping content_updated (recently created): ${pageId}`);
+            return false;
+        }
+    }
+    
+    // Update the timestamp
+    recentWebhooks.set(key, now);
+    
+    // Clean up old entries
+    setTimeout(() => {
+        recentWebhooks.delete(key);
+    }, WEBHOOK_DEBOUNCE_TIME + 1000);
+    
+    return true;
+}
+
+const pageStateCache = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+function hasMeaningfulChanges(pageId, currentData) {
+    const previousState = pageStateCache.get(pageId);
+    const now = Date.now();
+    
+    // Clean up old cache entries
+    if (previousState && (now - previousState.timestamp > CACHE_TTL)) {
+        pageStateCache.delete(pageId);
+        return true; // Treat as meaningful change after cache expires
+    }
+    
+    // For new pages or first time seeing this page
+    if (!previousState) {
+        pageStateCache.set(pageId, {
+            title: currentData.title,
+            content: currentData.content,
+            jenis: currentData.jenis,
+            deadline: currentData.deadline,
+            timestamp: now
+        });
+        return true; // Always process new pages
+    }
+    
+    // Check for actual changes
+    const changes = [];
+    
+    if (previousState.title !== currentData.title) {
+        changes.push('title');
+    }
+    if (previousState.content !== currentData.content) {
+        changes.push('content');
+    }
+    if (previousState.jenis !== currentData.jenis) {
+        changes.push('jenis');
+    }
+    if (previousState.deadline !== currentData.deadline) {
+        changes.push('deadline');
+    }
+    
+    const hasChanges = changes.length > 0;
+    
+    if (hasChanges) {
+        console.log(`📊 Meaningful changes detected for ${pageId}:`, changes);
+        // Update cache with new state
+        pageStateCache.set(pageId, {
+            title: currentData.title,
+            content: currentData.content,
+            jenis: currentData.jenis,
+            deadline: currentData.deadline,
+            timestamp: now
+        });
+    } else {
+        console.log(`📊 No meaningful changes for ${pageId}`);
+    }
+    
+    return hasChanges;
+}
+
 // **NEW: Check if it's a page-related webhook**
 function isPageWebhook(webhookType) {
     const pageWebhookTypes = [
@@ -121,6 +219,11 @@ async function processPageWebhook(webhookData) {
         return;
     }
     
+    // **NEW: Check if we should process this webhook**
+    if (!shouldProcessWebhook(pageId, webhookData.type)) {
+        return;
+    }
+
     console.log('📄 Page ID:', pageId);
     
     const page = await fetchPage(pageId);
@@ -144,9 +247,31 @@ async function processPageWebhook(webhookData) {
     const notionData = await extractNotionData(properties, pageId);
     console.log('📊 Extracted data:', notionData);
     
+    if (!hasMeaningfulChanges(pageId, notionData)) {
+        console.log(`🚫 No meaningful changes, skipping Discord message for ${pageId}`);
+        return;
+    }
+
     // Send to Discord
     await sendToDiscord(pageId, notionData, webhookData.type);
 }
+
+// **Add periodic cache cleanup**
+setInterval(() => {
+    const now = Date.now();
+    let cleanedCount = 0;
+    
+    for (const [pageId, state] of pageStateCache.entries()) {
+        if (now - state.timestamp > CACHE_TTL) {
+            pageStateCache.delete(pageId);
+            cleanedCount++;
+        }
+    }
+    
+    if (cleanedCount > 0) {
+        console.log(`🧹 Cleaned up ${cleanedCount} old cache entries`);
+    }
+}, CACHE_TTL);
 
 // **NEW: Extract page ID from different webhook structures**
 function extractPageId(webhookData) {
@@ -480,12 +605,12 @@ function formatMessageContent(notionData, pageId, webhookType) {
         : 'No content available';
     
     return `
-# **__----- :sparkles: ${notionData.title} (I${jenisText}) :sparkles: -----__**
+# **__----- :sparkles: ${notionData.title} (${jenisText}) :sparkles: -----__**
 
 ${formattedContent}
 
-### **__----- :calendar_spiral:  Deadline ${deadlineText}  :calendar_spiral:  -----__**
-### ${isNew ? '🆕 *Tugas Baru*' : '✏️ *Tugas Update*'}
+### **__----- :calendar_spiral:  Deadline ${deadlineText}  :calendar_spiral: -----__**
+### **__----- ${isNew ? '🆕 *Tugas Baru*' : '✏️ *Tugas Update*'} -----__**
     `.trim();
 } //**Page ID:** \`${pageId}\` // **Webhook Type:** ${webhookType}
 
