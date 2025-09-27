@@ -56,6 +56,30 @@ exports.handler = async (event, context) => {
     }
 };
 
+// Store message ID in a Notion property
+async function storeMessageId(notionPageId, discordMessageId) {
+    const { Client } = require('@notionhq/client');
+    const notion = new Client({ auth: process.env.NOTION_TOKEN });
+    
+    await notion.pages.update({
+        page_id: notionPageId,
+        properties: {
+            'Discord Message ID': {
+                rich_text: [{ text: { content: discordMessageId } }]
+            }
+        }
+    });
+}
+
+// Retrieve message ID from Notion
+async function getMessageId(notionPageId) {
+    const { Client } = require('@notionhq/client');
+    const notion = new Client({ auth: process.env.NOTION_TOKEN });
+    
+    const page = await notion.pages.retrieve({ page_id: notionPageId });
+    return page.properties['Discord Message ID']?.rich_text[0]?.text?.content;
+}
+
 async function handleNotionWebhook(page_id, properties, created_time) {
     const discordClient = getDiscordClient();
     
