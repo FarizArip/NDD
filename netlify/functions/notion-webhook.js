@@ -181,7 +181,7 @@ function shouldFilterWebhook(webhookData) {
     return false;
 }
 
-function hasRelevantChangesWithTracking(pageId, currentData, webhookType, changedProperties = []) {
+function hasRelevantChangesWithTracking({ pageId, currentData, webhookType, changedProperties = [] }) {
     
     console.log('🔍 hasRelevantChangesWithTracking called with:', {
     pageId,
@@ -424,8 +424,13 @@ async function processPageWebhook(webhookData) {
     const notionData = await extractNotionData(properties, pageId);
     console.log('📊 Extracted data:', notionData);
 
-    // **NEW: Enhanced change detection with property tracking**
-    if (!hasRelevantChangesWithTracking(pageId, notionData, getChangedProperties(webhookData), webhookData.type)) {
+    // ✅ FIXED CALL:
+    if (!hasRelevantChangesWithTracking({
+        pageId: pageId,
+        currentData: notionData,
+        webhookType: webhookData.type,
+        changedProperties: getChangedProperties(webhookData)
+    })) {
         console.log(`🚫 No relevant changes, skipping Discord message for ${pageId}`);
         return;
     }
