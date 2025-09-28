@@ -386,6 +386,21 @@ async function processPageWebhook(webhookData) {
     return;
     }
 
+    // **DEBUG: Check what getChangedProperties returns**
+    const changedProps = getChangedProperties(webhookData);
+    console.log('📊 getChangedProperties returned:', {
+        type: typeof changedProps,
+        value: changedProps,
+        isArray: Array.isArray(changedProps)
+    });
+
+    // **DEBUG: Check parameter order**
+    console.log('🔍 Calling hasRelevantChangesWithTracking with:', {
+        pageId,
+        webhookType: webhookData.type,
+        changedProps
+    });
+
     //if (webhookData.type === 'page.created') {
     //    console.log('⏳ Page creation detected, adding processing delay...');
     //    await new Promise(resolve => setTimeout(resolve, 1000));
@@ -754,21 +769,43 @@ async function sendToDiscord(pageId, notionData, webhookType) {
         const messageContent = formatMessageContent(notionData, pageId, webhookType);
         
         // **CHECK BOTH SOURCES FOR MESSAGE ID**
-        const messageId = notionData.discordMessageId || await getStoredMessageId(pageId);
+        const storedMessageId = await getStoredMessageId(pageId);
+        
+        console.log('🔍 Message ID lookup:', { storedMessageId, fromNotion: notionData.discordMessageId });
 
+        // **TRY TO UPDATE EXISTING MESSAGE**
+        const messageId = storedMessageId || notionData.discordMessageId;
+        
         if (messageId) {
             try {
-                const message = await channel.messages.fetch(notionData.discordMessageId);
-                await message.edit(messageContent);
-                console.log('✅ Existing message updated:', notionData.discordMessageId);
-                return;
+                console.log('📝 Attempting to fetch message:', messageId);
+                
+                // **FIX: Proper message fetching with error handling**
+                const message = await channel.messages.fetch(messageId);
+                console.log('✅ Message fetched successfully:', { 
+                    id: message.id, 
+                    content: message.content.substring(0, 50) + '...',
+                    hasEdit: typeof message.edit === 'function'
+                });
+                
+                // **FIX: Verify the message object has edit method**
+                if (typeof message.edit === 'function') {
+                    const updatedMessage = await message.edit(messageContent);
+                    console.log('✅ Message updated successfully! ID:', updatedMessage.id);
+                    return;
+                } else {
+                    console.error('❌ Message object missing edit method:', message);
+                    throw new Error('Message object does not have edit method');
+                }
                 
             } catch (error) {
                 if (error.code === 10008) { // Unknown message (was deleted)
                     console.log('🗑️ Message was deleted, creating new one');
+                    await storeMessageId(pageId, null);
                     // Fall through to create new message
                 } else {
-                    throw error;
+                    console.error('❌ Error updating message:', error);
+                    // Fall through to create new message on error
                 }
             }
         }
