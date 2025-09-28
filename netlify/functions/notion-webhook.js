@@ -844,7 +844,7 @@ function formatMessageContent(notionData, pageId, webhookType) {
 
     // **NEW: Format content with proper line breaks**
     const formattedContent = notionData.content 
-        ? notionData.content.split('\n').map(line => line.trim() ? ` ${line}` : '').join('\n')
+        ? notionData.content.split('\n').map(line => line.trim() ? `> ${line}` : '').join('\n')
         : 'No content available';
     
     return `
