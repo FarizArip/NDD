@@ -592,16 +592,40 @@ async function extractPageContent(pageId) {
         let content = '';
         let contentLength = 0;
         const maxLength = 1000; // Discord character limit
+        let inList = false;
         
-        // Process each block
-        for (const block of blocks) {
+        // Process blocks with lookahead for list header detection
+        for (let i = 0; i < blocks.length; i++) {
             if (contentLength >= maxLength) break;
             
-            const blockText = extractTextFromBlock(block);
+            const currentBlock = blocks[i];
+            const nextBlock = i + 1 < blocks.length ? blocks[i + 1] : null;
+            
+            const blockText = extractTextFromBlock(currentBlock, nextBlock, inList);
+            
             if (blockText && contentLength + blockText.length <= maxLength) {
-                content += blockText + '\n';
+                // Check if we're starting/ending a list
+                const isListItem = currentBlock.type === 'bulleted_list_item' || 
+                                 currentBlock.type === 'numbered_list_item' || 
+                                 currentBlock.type === 'to_do';
+                
+                if (isListItem && !inList) {
+                    // Starting a list
+                    inList = true;
+                } else if (!isListItem && inList) {
+                    // Ending a list - add extra space after last item
+                    content += '\n';
+                    inList = false;
+                }
+                
+                content += blockText;
                 contentLength += blockText.length;
             }
+        }
+        
+        // Add final newline if we ended in a list
+        if (inList) {
+            content += '\n';
         }
         
         // Trim and add ellipsis if content was truncated
@@ -644,7 +668,7 @@ async function fetchPageBlocks(pageId) {
 }
 
 // **NEW: Extract text from a single block**
-function extractTextFromBlock(block) {
+function extractTextFromBlock(block, nextBlock = null, inList = false) {
     if (!block || !block.type) return '';
     
     const blockType = block.type;
@@ -663,43 +687,41 @@ function extractTextFromBlock(block) {
     }
     
     // Format based on block type
-    let formattedText = '';
-    let spacing = '\n\n'; // Default spacing
-    
+    // **IMPROVED: Only treat as list header if colon is at the VERY END**
+    const trimmedText = text.trim();
+    const isListHeader = trimmedText.endsWith(':') && 
+                        !trimmedText.includes('\n') && // No internal newlines
+                        nextBlock && 
+                        (nextBlock.type === 'bulleted_list_item' || 
+                         nextBlock.type === 'numbered_list_item' || 
+                         nextBlock.type === 'to_do');
+
     switch (blockType) {
         case 'heading_1':
-            formattedText = `# ${text}`;
-            spacing = '\n\n'; // Extra space after headings
-            break;
+            return `# ${text}\n\n`;
         case 'heading_2':
-            formattedText = `## ${text}`;
-            spacing = '\n\n';
-            break;
+            return `## ${text}\n\n`;
         case 'heading_3':
-            formattedText = `### ${text}`;
-            spacing = '\n\n';
-            break;
+            return `### ${text}\n\n`;
         case 'bulleted_list_item':
-            formattedText = `• ${text}`;
-            spacing = '\n'; // Less space between list items
-            break;
+            return `• ${text}\n`;
         case 'numbered_list_item':
-            formattedText = `1. ${text}`;
-            spacing = '\n';
-            break;
+            return `1. ${text}\n`;
         case 'to_do':
             const checked = blockData.checked ? '✅' : '☐';
-            formattedText = `${checked} ${text}`;
-            spacing = '\n';
-            break;
+            return `${checked} ${text}\n`;
         case 'paragraph':
+            if (isListHeader) {
+                return `${text}\n`; // Reduced spacing for list headers
+            } else if (inList) {
+                // If we're in a list and get a paragraph, it breaks the list
+                return `\n${text}\n\n`; // Extra space to separate from list
+            } else {
+                return `${text}\n\n`; // Normal spacing
+            }
         default:
-            formattedText = text;
-            spacing = '\n\n'; // Normal paragraphs get more space
-            break;
+            return `${text}\n\n`;
     }
-    
-    return formattedText + spacing;
 }
 
 function extractSelectProperty(properties, possibleNames) {
@@ -871,7 +893,7 @@ function formatMessageContent(notionData, pageId, webhookType) {
 
     // **NEW: Format content with proper line breaks**
     const formattedContent = notionData.content 
-        ? notionData.content.split('\n').map(line => line.trim() ? `> ${line}` : '').join('\n')
+        ? `>>> ${notionData.content}`
         : 'No content available';
     
     return `
