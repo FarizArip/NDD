@@ -623,11 +623,6 @@ async function extractPageContent(pageId) {
             }
         }
         
-        // Add final newline if we ended in a list
-        if (inList) {
-            content += '\n';
-        }
-        
         // Trim and add ellipsis if content was truncated
         content = content.trim();
         if (contentLength >= maxLength) {
@@ -878,7 +873,7 @@ async function sendToDiscord(pageId, notionData, webhookType) {
 }
 
 // **UPDATED: Format message content**
-function formatMessageContent(notionData, pageId, webhookType) {
+function formatMessageContent(notionData, webhookType) {
     const isNew = webhookType.includes('.created') || webhookType.includes('_added');
     
     let deadlineText = 'No deadline';
@@ -893,7 +888,7 @@ function formatMessageContent(notionData, pageId, webhookType) {
 
     // **NEW: Format content with proper line breaks**
     const formattedContent = notionData.content 
-        ? `>>> ${notionData.content}`
+        ? `> ${notionData.content.split('\n').filter(line => line.trim()).join('\n> ')}`
         : 'No content available';
     
     return `
