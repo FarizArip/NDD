@@ -26,7 +26,10 @@ const TRANSMISSION_CONFIG = {
     ],
 
     // Property that controls transmission
-    controlProperty: 'Priority' // or 'Transmit', 'Send to Discord', etc.
+    controlProperty: 'Priority', // or 'Transmit', 'Send to Discord', etc.
+    
+    // **NEW: Configure default behavior**
+    defaultTransmit: false // ✅ Set to false to block by default
 };
 
 async function initializeDiscordClient() {
@@ -296,20 +299,25 @@ function shouldTransmitPage(properties) {
     // If no control property exists, default to sending (or not sending)
     if (!controlProp) {
         console.log(`⚠️ No "${TRANSMISSION_CONFIG.controlProperty}" property found, defaulting to transmit`);
-        return true; // or false depending on your preference
+        return TRANSMISSION_CONFIG.defaultTransmit; // or false depending on your preference
     }
     
-    if (controlProp.type === 'select' && controlProp.select?.name) {
-        const status = controlProp.select.name;
-        const shouldTransmit = TRANSMISSION_CONFIG.enabledStatuses.includes(status);
-        
-        console.log(`📊 Transmission check: "${status}" → ${shouldTransmit ? '✅ SEND' : '🚫 BLOCK'}`);
-        return shouldTransmit;
+    if (controlProp.type === 'select') {
+        if (controlProp.select?.name) {
+            const status = controlProp.select.name;
+            const shouldTransmit = TRANSMISSION_CONFIG.enabledStatuses.includes(status);
+            
+            console.log(`📊 Transmission check: "${status}" → ${shouldTransmit ? '✅ SEND' : '🚫 BLOCK'}`);
+            return shouldTransmit;
+        } else {
+            // If control property exists but no value selected, default behavior
+            console.log(`⚠️ "${TRANSMISSION_CONFIG.controlProperty}" exists but no value selected, defaulting to ${TRANSMISSION_CONFIG.defaultTransmit ? 'TRANSMIT' : 'BLOCK'}`);
+            return TRANSMISSION_CONFIG.defaultTransmit;
+        }
     }
     
-    // If control property exists but no value selected, default behavior
-    console.log(`⚠️ Control property exists but no value selected, defaulting to transmit`);
-    return true;
+    console.log(`⚠️ "${TRANSMISSION_CONFIG.controlProperty}" is not a select property, defaulting to ${TRANSMISSION_CONFIG.defaultTransmit ? 'TRANSMIT' : 'BLOCK'}`);
+    return TRANSMISSION_CONFIG.defaultTransmit;
 }
 
 // **NEW: Check if changes are relevant**
@@ -591,7 +599,7 @@ async function extractPageContent(pageId) {
             
             const blockText = extractTextFromBlock(block);
             if (blockText && contentLength + blockText.length <= maxLength) {
-                content += blockText + '\n\n';
+                content += blockText + '\n';
                 contentLength += blockText.length;
             }
         }
@@ -655,24 +663,43 @@ function extractTextFromBlock(block) {
     }
     
     // Format based on block type
+    let formattedText = '';
+    let spacing = '\n\n'; // Default spacing
+    
     switch (blockType) {
         case 'heading_1':
-            return `# ${text}`;
+            formattedText = `# ${text}`;
+            spacing = '\n\n'; // Extra space after headings
+            break;
         case 'heading_2':
-            return `## ${text}`;
+            formattedText = `## ${text}`;
+            spacing = '\n\n';
+            break;
         case 'heading_3':
-            return `### ${text}`;
+            formattedText = `### ${text}`;
+            spacing = '\n\n';
+            break;
         case 'bulleted_list_item':
-            return `• ${text}`;
+            formattedText = `• ${text}`;
+            spacing = '\n'; // Less space between list items
+            break;
         case 'numbered_list_item':
-            return `1. ${text}`;
+            formattedText = `1. ${text}`;
+            spacing = '\n';
+            break;
         case 'to_do':
             const checked = blockData.checked ? '✅' : '☐';
-            return `${checked} ${text}`;
+            formattedText = `${checked} ${text}`;
+            spacing = '\n';
+            break;
         case 'paragraph':
         default:
-            return text;
+            formattedText = text;
+            spacing = '\n\n'; // Normal paragraphs get more space
+            break;
     }
+    
+    return formattedText + spacing;
 }
 
 function extractSelectProperty(properties, possibleNames) {
