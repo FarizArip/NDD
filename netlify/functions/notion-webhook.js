@@ -890,7 +890,7 @@ function formatMessageContent(notionData, webhookType) {
     const formattedContent = notionData.content 
         ? notionData.content
             .split('\n')
-            .map(line => line === '' ? '>' : `> ${line}`)
+            .map(line => line === '' ? '> ' : `> ${line}`)
             .join('\n')
         : 'No content available';
     
