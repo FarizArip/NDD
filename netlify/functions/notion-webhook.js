@@ -591,7 +591,7 @@ async function extractPageContent(pageId) {
             
             const blockText = extractTextFromBlock(block);
             if (blockText && contentLength + blockText.length <= maxLength) {
-                content += blockText + '\n';
+                content += blockText + '\n\n';
                 contentLength += blockText.length;
             }
         }
