@@ -614,7 +614,7 @@ async function extractPageContent(pageId) {
                     inList = true;
                 } else if (!isListItem && inList) {
                     // Ending a list - add extra space after last item
-                    content += '\n';
+                    //content += '\n';
                     inList = false;
                 }
                 
