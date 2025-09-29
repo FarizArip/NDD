@@ -887,14 +887,17 @@ function formatMessageContent(notionData, webhookType) {
     }
 
     // **NEW: Format content with proper line breaks**
-    const contentBlock = notionData.content 
-        ? `>>> ${notionData.content}`
+    const formattedContent = notionData.content 
+        ? notionData.content
+            .split('\n')
+            .map(line => line === '' ? '>' : `> ${line}`)
+            .join('\n')
         : 'No content available';
     
     return `
 # **__----- :sparkles: ${notionData.title} (${jenisText}) :sparkles: -----__**
 
-${contentBlock}
+${formattedContent}
 
 ### **__----- :calendar_spiral:  Deadline ${deadlineText}  :calendar_spiral: -----__**
 ### **__----- ${isNew ? '🆕 *Tugas Baru* 🆕' : '✏️ *Tugas Update* ✏️'} -----__**
