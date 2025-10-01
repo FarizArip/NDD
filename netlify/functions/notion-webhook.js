@@ -585,24 +585,10 @@ async function extractPageContent(pageId) {
         if (!blocks || blocks.length === 0) {
             return 'No content available';
         }
-        
-        console.log('🔍 BLOCKS DEBUG INFO:');
-        blocks.forEach((block, index) => {
-            console.log(`Block ${index} (${block.type}):`, {
-                id: block.id,
-                type: block.type,
-                has_children: block.has_children,
-                parent: block.parent,
-                // Log the actual block structure
-                block_structure: JSON.stringify(block, null, 2).substring(0, 200) + '...'
-            });
-        });
-        
 
         let content = '';
         let contentLength = 0;
         const maxLength = 1000; // Discord character limit
-        let inList = false;
         
         // Process blocks with lookahead for list header detection
         for (let i = 0; i < blocks.length; i++) {
@@ -687,6 +673,25 @@ function formatBlockWithIndent(block, nextBlock = null) {
         default:
             return `${indent}${text}\n\n`;
     }
+}
+
+// **NEW: Fetch complete page to get parent database info**
+
+
+async function fetchPage(pageId) {
+    try {
+        const notion = initializeNotionClient();
+        const page = await notion.pages.retrieve({ page_id: pageId });
+        return page;
+    } catch (error) {
+        console.error('❌ Error fetching page:', error);
+        return null;
+    }
+}
+
+// **Wrapper function for backward compatibility**
+async function fetchPageBlocks(pageId) {
+    return await fetchPageBlocksRecursive(pageId);
 }
 
 // **NEW: Recursively fetch all blocks including children**
@@ -815,7 +820,7 @@ async function sendToDiscord(pageId, notionData, webhookType) {
         }
         
         const channel = await client.channels.fetch(process.env.DISCORD_CHANNEL_ID);
-        const messageContent = formatMessageContent(notionData, pageId, webhookType);
+        const messageContent = formatMessageContent(notionData, webhookType);
         
         // **CHECK BOTH SOURCES FOR MESSAGE ID**
         const storedMessageId = await getStoredMessageId(pageId);
