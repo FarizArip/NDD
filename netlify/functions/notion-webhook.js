@@ -598,9 +598,10 @@ async function extractPageContent(pageId) {
             const currentBlock = blocks[i];
             const nextBlock = i + 1 < blocks.length ? blocks[i + 1] : null;
             
-            const isChildBlock = currentIndentLevel > 0;
+            // Get current indentation level
+            const indentLevel = getIndentLevel(currentBlock);
             
-            const blockText = extractTextFromBlock(currentBlock, nextBlock, inList, isChildBlock);
+            const blockText = extractTextFromBlock(currentBlock, nextBlock, inList, indentLevel);
             
             if (blockText && contentLength + blockText.length <= maxLength) {
                 
@@ -619,8 +620,6 @@ async function extractPageContent(pageId) {
                 } else if (!isListItem && inList) {
                     // Ending a list
                     inList = false;
-                } else if (!isListItem) {
-                    currentIndentLevel = 0;
                 }
                 
                 content += blockText;
@@ -668,7 +667,7 @@ async function fetchPageBlocks(pageId) {
 }
 
 // **NEW: Extract text from a single block**
-function extractTextFromBlock(block, nextBlock = null, inList = false, isChildBlock = false) {
+function extractTextFromBlock(block, nextBlock = null, inList = false, indentLevel = 0) {
     if (!block || !block.type) return '';
     
     const blockType = block.type;
@@ -685,9 +684,6 @@ function extractTextFromBlock(block, nextBlock = null, inList = false, isChildBl
             text += richText.plain_text;
         }
     }
-    
-    // **NEW: Detect nested list items**
-    const isNestedItem = isChildBlock;
 
     // Format based on block type
     // **IMPROVED: Only treat as list header if colon is at the VERY END**
@@ -698,6 +694,8 @@ function extractTextFromBlock(block, nextBlock = null, inList = false, isChildBl
                         (nextBlock.type === 'bulleted_list_item' || 
                          nextBlock.type === 'numbered_list_item' || 
                          nextBlock.type === 'to_do');
+    // Format based on block type with proper indentation
+    const indent = '  '.repeat(indentLevel); // 2 spaces per indent level
 
     switch (blockType) {
         case 'heading_1':
@@ -707,26 +705,12 @@ function extractTextFromBlock(block, nextBlock = null, inList = false, isChildBl
         case 'heading_3':
             return `### ${text}\n\n`;
         case 'bulleted_list_item':
-            // **FIXED: Handle nested bullet points**
-            if (isNestedItem) {
-                return `  ◦ ${text}\n`; // Nested bullet
-            } else {
-                return `• ${text}\n`; // Top-level bullet
-            }
+            return `${indent}• ${text}\n`;
         case 'numbered_list_item':
-            // **FIXED: Handle nested numbered lists**
-            if (isNestedItem) {
-                return `  a. ${text}\n`; // Nested items as bullets for simplicity
-            } else {
-                return `1. ${text}\n`; // Top-level numbered
-            }
+            return `${indent}1. ${text}\n`;
         case 'to_do':
             const checked = blockData.checked ? '✅' : '☐';
-            if (isNestedItem) {
-                return `  ${checked} ${text}\n`; // Nested to-do
-            } else {
-                return `${checked} ${text}\n`; // Top-level to-do
-            }
+            return `${indent}${checked} ${text}\n`;
         case 'paragraph':
             if (isListHeader) {
                 return `${text}\n`; // Reduced spacing for list headers
