@@ -605,10 +605,6 @@ async function extractPageContent(pageId) {
             
             if (blockText && contentLength + blockText.length <= maxLength) {
                 
-                // **UPDATE: Track if this block has children**
-                if (currentBlock.has_children) {
-                    currentIndentLevel++;
-                }
                 // Check if we're starting/ending a list
                 const isListItem = currentBlock.type === 'bulleted_list_item' || 
                                  currentBlock.type === 'numbered_list_item' || 
