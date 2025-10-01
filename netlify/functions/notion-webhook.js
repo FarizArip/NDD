@@ -650,6 +650,18 @@ function formatBlockWithIndent(block, nextBlock = null) {
                          nextBlock.type === 'numbered_list_item' || 
                          nextBlock.type === 'to_do');
     
+    // **IMPROVED: Detect when we're exiting a list context**
+    const currentIsListItem = blockType === 'bulleted_list_item' || 
+                             blockType === 'numbered_list_item' || 
+                             blockType === 'to_do';
+    
+    const nextIsListItem = nextBlock && 
+                          (nextBlock.type === 'bulleted_list_item' || 
+                           nextBlock.type === 'numbered_list_item' || 
+                           nextBlock.type === 'to_do');
+    
+    const isEndOfList = currentIsListItem && !nextIsListItem;
+                         
     switch (blockType) {
         case 'heading_1':
             return `${indent}# ${text}\n\n`;
@@ -658,17 +670,21 @@ function formatBlockWithIndent(block, nextBlock = null) {
         case 'heading_3':
             return `${indent}### ${text}\n\n`;
         case 'bulleted_list_item':
-            return `${indent}• ${text}\n`;
+            // **USE ◦ FOR NESTED BULLETS**
+            const bullet = indentLevel > 0 ? '◦' : '•';
+            return `${indent}${bullet} ${text}\n${isEndOfList ? '\n' : ''}`;
         case 'numbered_list_item':
-            return `${indent}1. ${text}\n`;
+            return `${indent}1. ${text}\n${isEndOfList ? '\n' : ''}`;
         case 'to_do':
             const checked = blockData.checked ? '✅' : '☐';
-            return `${indent}${checked} ${text}\n`;
+            return `${indent}${checked} ${text}\n${isEndOfList ? '\n' : ''}`;
         case 'paragraph':
             if (isListHeader) {
-                return `${indent}${text}\n`; // Reduced spacing for list headers
+                return `${indent}${text}\n`;
             } else {
-                return `${indent}${text}\n\n`; // Normal spacing
+                // **ADD EXTRA SPACE AFTER LISTS**
+                const prevBlockWasList = block._prevBlockWasList; // You'd need to track this
+                return `${indent}${text}\n\n`;
             }
         default:
             return `${indent}${text}\n\n`;
