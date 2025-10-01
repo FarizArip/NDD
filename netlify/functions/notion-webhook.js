@@ -580,7 +580,7 @@ function extractTitle(properties) {
 async function extractPageContent(pageId) {
     try {
         console.log('📖 Fetching page content...');
-        const blocks = await fetchPageBlocks(pageId);
+        const blocks = await fetchPageBlocksRecursive(pageId);
         
         if (!blocks || blocks.length === 0) {
             return 'No content available';
@@ -611,27 +611,9 @@ async function extractPageContent(pageId) {
             const currentBlock = blocks[i];
             const nextBlock = i + 1 < blocks.length ? blocks[i + 1] : null;
             
-            // Get current indentation level
-            //const indentLevel = getIndentLevel(currentBlock);
-            const indentLevel = calculateIndentLevel(currentBlock, blocks, i);
-            const blockText = formatBlockWithIndent(currentBlock, indentLevel);
-            //const blockText = extractTextFromBlock(currentBlock, nextBlock, inList, indentLevel);
+            const blockText = formatBlockWithIndent(currentBlock, nextBlock);
             
             if (blockText && contentLength + blockText.length <= maxLength) {
-                
-                // Check if we're starting/ending a list
-                const isListItem = currentBlock.type === 'bulleted_list_item' || 
-                                 currentBlock.type === 'numbered_list_item' || 
-                                 currentBlock.type === 'to_do';
-                
-                if (isListItem && !inList) {
-                    // Starting a list
-                    inList = true;
-                } else if (!isListItem && inList) {
-                    // Ending a list
-                    inList = false;
-                }
-                
                 content += blockText;
                 contentLength += blockText.length;
             }
@@ -652,31 +634,13 @@ async function extractPageContent(pageId) {
     }
 }
 
-// **NEW: Calculate indent level based on block relationships**
-function calculateIndentLevel(block, allBlocks, currentIndex) {
-    // If block has a parent that's another block, it's nested
-    if (block.parent && block.parent.type === 'block') {
-        return 1;
-    }
-    
-    // Check if this is a child of a previous list item
-    for (let i = currentIndex - 1; i >= 0; i--) {
-        const previousBlock = allBlocks[i];
-        if (previousBlock.has_children) {
-            // This block might be a child of the previous block
-            return 1;
-        }
-    }
-    
-    return 0;
-}
-
-// **NEW: Format block with proper indentation**
-function formatBlockWithIndent(block, indentLevel) {
+// **UPDATED: Format block with proper indentation and list header detection**
+function formatBlockWithIndent(block, nextBlock = null) {
     if (!block || !block.type) return '';
     
     const blockType = block.type;
     const blockData = block[blockType];
+    const indentLevel = block.indent_level || 0;
 
     if (!blockData.rich_text || blockData.rich_text.length === 0) {
         return '';
@@ -691,6 +655,15 @@ function formatBlockWithIndent(block, indentLevel) {
     
     const indent = '  '.repeat(indentLevel);
     
+    // **REINTRODUCED: List header detection logic**
+    const trimmedText = text.trim();
+    const isListHeader = trimmedText.endsWith(':') && 
+                        !trimmedText.includes('\n') && // No internal newlines
+                        nextBlock && 
+                        (nextBlock.type === 'bulleted_list_item' || 
+                         nextBlock.type === 'numbered_list_item' || 
+                         nextBlock.type === 'to_do');
+    
     switch (blockType) {
         case 'heading_1':
             return `${indent}# ${text}\n\n`;
@@ -701,127 +674,49 @@ function formatBlockWithIndent(block, indentLevel) {
         case 'bulleted_list_item':
             return `${indent}• ${text}\n`;
         case 'numbered_list_item':
-            // Simple counter - in production you'd want to track this properly
-            return `${indent}1. ${text}\n`;
-        case 'to_do':
-            const checked = blockData.checked ? '✅' : '☐';
-            return `${indent}${checked} ${text}\n`;
-        case 'paragraph':
-            return `${indent}${text}\n\n`;
-        default:
-            return `${indent}${text}\n\n`;
-    }
-}
-
-// **NEW: Fetch complete page to get parent database info**
-async function fetchPage(pageId) {
-    try {
-        const notion = initializeNotionClient();
-        const page = await notion.pages.retrieve({ page_id: pageId });
-        return page;
-    } catch (error) {
-        console.error('❌ Error fetching page:', error);
-        return null;
-    }
-}
-
-// **NEW: Fetch blocks from Notion API**
-async function fetchPageBlocks(pageId) {
-    const notion = initializeNotionClient();
-    
-    const response = await notion.blocks.children.list({
-        block_id: pageId,
-        page_size: 20 // Limit to first 20 blocks for performance
-    });
-    
-    return response.results;
-}
-
-// **NEW: Extract text from a single block**
-function extractTextFromBlock(block, nextBlock = null, inList = false, indentLevel = 0) {
-    if (!block || !block.type) return '';
-    
-    const blockType = block.type;
-    const blockData = block[blockType];
-
-    if (!blockData.rich_text || blockData.rich_text.length === 0) {
-        return '';
-    }
-    
-    // Extract all rich text segments
-    let text = '';
-    for (const richText of blockData.rich_text) {
-        if (richText.plain_text) {
-            text += richText.plain_text;
-        }
-    }
-
-    // Format based on block type
-    // **IMPROVED: Only treat as list header if colon is at the VERY END**
-    const trimmedText = text.trim();
-    const isListHeader = trimmedText.endsWith(':') && 
-                        !trimmedText.includes('\n') && // No internal newlines
-                        nextBlock && 
-                        (nextBlock.type === 'bulleted_list_item' || 
-                         nextBlock.type === 'numbered_list_item' || 
-                         nextBlock.type === 'to_do');
-    // Format based on block type with proper indentation
-    const indent = '  '.repeat(indentLevel); // 2 spaces per indent level
-
-    switch (blockType) {
-        case 'heading_1':
-            return `# ${text}\n\n`;
-        case 'heading_2':
-            return `## ${text}\n\n`;
-        case 'heading_3':
-            return `### ${text}\n\n`;
-        case 'bulleted_list_item':
-            return `${indent}• ${text}\n`;
-        case 'numbered_list_item':
             return `${indent}1. ${text}\n`;
         case 'to_do':
             const checked = blockData.checked ? '✅' : '☐';
             return `${indent}${checked} ${text}\n`;
         case 'paragraph':
             if (isListHeader) {
-                return `${text}\n`; // Reduced spacing for list headers
-            } else if (inList) {
-                // If we're in a list and get a paragraph, it breaks the list
-                return `\n${text}\n\n`; // Extra space to separate from list
+                return `${indent}${text}\n`; // Reduced spacing for list headers
             } else {
-                return `${text}\n\n`; // Normal spacing
+                return `${indent}${text}\n\n`; // Normal spacing
             }
         default:
-            return `${text}\n\n`;
+            return `${indent}${text}\n\n`;
     }
 }
 
-// **NEW: Helper function to detect indentation level**
-// **FIXED: Properly detect indentation level from Notion blocks**
-function getIndentLevel(block) {
-    // Method 1: Check for actual indentation in list items
-    if (block.type === 'bulleted_list_item' && block.bulleted_list_item) {
-        // Notion API sometimes provides indent level directly
-        return block.bulleted_list_item.indent || 0;
-    }
-    if (block.type === 'numbered_list_item' && block.numbered_list_item) {
-        return block.numbered_list_item.indent || 0;
-    }
-    if (block.type === 'to_do' && block.to_do) {
-        return block.to_do.indent || 0;
+// **NEW: Recursively fetch all blocks including children**
+async function fetchPageBlocksRecursive(blockId, indentLevel = 0) {
+    const notion = initializeNotionClient();
+    
+    const response = await notion.blocks.children.list({
+        block_id: blockId,
+        page_size: 50 // Increase limit to get more blocks
+    });
+    
+    let allBlocks = [];
+    
+    for (const block of response.results) {
+        // Add current block with indent level
+        const blockWithIndent = {
+            ...block,
+            indent_level: indentLevel
+        };
+        allBlocks.push(blockWithIndent);
+        
+        // If block has children, recursively fetch them
+        if (block.has_children) {
+            console.log(`🔍 Fetching children for ${block.type} block (indent ${indentLevel + 1})`);
+            const childBlocks = await fetchPageBlocksRecursive(block.id, indentLevel + 1);
+            allBlocks = allBlocks.concat(childBlocks);
+        }
     }
     
-    // Method 2: Check if this block is a child of another block
-    // This is more reliable for detecting nested items
-    if (block.parent && block.parent.type === 'block') {
-        return 1; // This block is nested under another block
-    }
-    
-    // Method 3: Check for the presence of children in the previous block
-    // If the previous block has children and this block is one of them, it's nested
-    
-    // Default to top-level
-    return 0;
+    return allBlocks;
 }
 
 function extractSelectProperty(properties, possibleNames) {
