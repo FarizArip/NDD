@@ -598,9 +598,16 @@ async function extractPageContent(pageId) {
             const currentBlock = blocks[i];
             const nextBlock = i + 1 < blocks.length ? blocks[i + 1] : null;
             
-            const blockText = extractTextFromBlock(currentBlock, nextBlock, inList);
+            const isChildBlock = currentIndentLevel > 0;
+            
+            const blockText = extractTextFromBlock(currentBlock, nextBlock, inList, isChildBlock);
             
             if (blockText && contentLength + blockText.length <= maxLength) {
+                
+                // **UPDATE: Track if this block has children**
+                if (currentBlock.has_children) {
+                    currentIndentLevel++;
+                }
                 // Check if we're starting/ending a list
                 const isListItem = currentBlock.type === 'bulleted_list_item' || 
                                  currentBlock.type === 'numbered_list_item' || 
@@ -610,9 +617,10 @@ async function extractPageContent(pageId) {
                     // Starting a list
                     inList = true;
                 } else if (!isListItem && inList) {
-                    // Ending a list - add extra space after last item
-                    //content += '\n';
+                    // Ending a list
                     inList = false;
+                } else if (!isListItem) {
+                    currentIndentLevel = 0;
                 }
                 
                 content += blockText;
@@ -660,19 +668,11 @@ async function fetchPageBlocks(pageId) {
 }
 
 // **NEW: Extract text from a single block**
-function extractTextFromBlock(block, nextBlock = null, inList = false) {
+function extractTextFromBlock(block, nextBlock = null, inList = false, isChildBlock = false) {
     if (!block || !block.type) return '';
     
     const blockType = block.type;
     const blockData = block[blockType];
-    
-    // **DEBUG: Log block structure to see available properties**
-    console.log('Block structure:', {
-        type: blockType,
-        id: block.id,
-        has_children: block.has_children,
-        blockData: blockData
-    });
 
     if (!blockData.rich_text || blockData.rich_text.length === 0) {
         return '';
@@ -687,13 +687,7 @@ function extractTextFromBlock(block, nextBlock = null, inList = false) {
     }
     
     // **NEW: Detect nested list items**
-    const isNested = blockData.is_nested || false; // Notion might have this property
-    const indentLevel = getIndentLevel(block); // Helper function to detect indentation
-    const isNestedItem = 
-        blockData.is_nested ||
-        blockData.indent > 0 ||
-        block.has_children && !blockData.children || // Has children but they're not in this block
-        getIndentLevel(block) >= 1;
+    const isNestedItem = isChildBlock;
 
     // Format based on block type
     // **IMPROVED: Only treat as list header if colon is at the VERY END**
