@@ -586,6 +586,19 @@ async function extractPageContent(pageId) {
             return 'No content available';
         }
         
+        console.log('🔍 BLOCKS DEBUG INFO:');
+        blocks.forEach((block, index) => {
+            console.log(`Block ${index} (${block.type}):`, {
+                id: block.id,
+                type: block.type,
+                has_children: block.has_children,
+                parent: block.parent,
+                // Log the actual block structure
+                block_structure: JSON.stringify(block, null, 2).substring(0, 200) + '...'
+            });
+        });
+        
+
         let content = '';
         let contentLength = 0;
         const maxLength = 1000; // Discord character limit
@@ -599,9 +612,10 @@ async function extractPageContent(pageId) {
             const nextBlock = i + 1 < blocks.length ? blocks[i + 1] : null;
             
             // Get current indentation level
-            const indentLevel = getIndentLevel(currentBlock);
-            
-            const blockText = extractTextFromBlock(currentBlock, nextBlock, inList, indentLevel);
+            //const indentLevel = getIndentLevel(currentBlock);
+            const indentLevel = calculateIndentLevel(currentBlock, blocks, i);
+            const blockText = formatBlockWithIndent(currentBlock, indentLevel);
+            //const blockText = extractTextFromBlock(currentBlock, nextBlock, inList, indentLevel);
             
             if (blockText && contentLength + blockText.length <= maxLength) {
                 
@@ -635,6 +649,67 @@ async function extractPageContent(pageId) {
     } catch (error) {
         console.error('❌ Error extracting page content:', error);
         return 'Error loading content';
+    }
+}
+
+// **NEW: Calculate indent level based on block relationships**
+function calculateIndentLevel(block, allBlocks, currentIndex) {
+    // If block has a parent that's another block, it's nested
+    if (block.parent && block.parent.type === 'block') {
+        return 1;
+    }
+    
+    // Check if this is a child of a previous list item
+    for (let i = currentIndex - 1; i >= 0; i--) {
+        const previousBlock = allBlocks[i];
+        if (previousBlock.has_children) {
+            // This block might be a child of the previous block
+            return 1;
+        }
+    }
+    
+    return 0;
+}
+
+// **NEW: Format block with proper indentation**
+function formatBlockWithIndent(block, indentLevel) {
+    if (!block || !block.type) return '';
+    
+    const blockType = block.type;
+    const blockData = block[blockType];
+
+    if (!blockData.rich_text || blockData.rich_text.length === 0) {
+        return '';
+    }
+    
+    let text = '';
+    for (const richText of blockData.rich_text) {
+        if (richText.plain_text) {
+            text += richText.plain_text;
+        }
+    }
+    
+    const indent = '  '.repeat(indentLevel);
+    
+    switch (blockType) {
+        case 'heading_1':
+            return `${indent}# ${text}\n\n`;
+        case 'heading_2':
+            return `${indent}## ${text}\n\n`;
+        case 'heading_3':
+            return `${indent}### ${text}\n\n`;
+        case 'bulleted_list_item':
+            return `${indent}• ${text}\n`;
+        case 'numbered_list_item':
+            // Simple counter - in production you'd want to track this properly
+            return `${indent}1. ${text}\n`;
+        case 'to_do':
+            const checked = blockData.checked ? '✅' : '☐';
+            return `${indent}${checked} ${text}\n`;
+        case 'paragraph':
+            return `${indent}${text}\n\n`;
+        default:
+            return `${indent}${text}\n\n`;
     }
 }
 
@@ -722,24 +797,30 @@ function extractTextFromBlock(block, nextBlock = null, inList = false, indentLev
 }
 
 // **NEW: Helper function to detect indentation level**
+// **FIXED: Properly detect indentation level from Notion blocks**
 function getIndentLevel(block) {
-    // Method 1: Check if Notion provides indentation info
-    if (block.bulleted_list_item?.indent !== undefined) {
-        return block.bulleted_list_item.indent;
+    // Method 1: Check for actual indentation in list items
+    if (block.type === 'bulleted_list_item' && block.bulleted_list_item) {
+        // Notion API sometimes provides indent level directly
+        return block.bulleted_list_item.indent || 0;
     }
-    if (block.numbered_list_item?.indent !== undefined) {
-        return block.numbered_list_item.indent;
+    if (block.type === 'numbered_list_item' && block.numbered_list_item) {
+        return block.numbered_list_item.indent || 0;
     }
-    if (block.to_do?.indent !== undefined) {
-        return block.to_do.indent;
+    if (block.type === 'to_do' && block.to_do) {
+        return block.to_do.indent || 0;
     }
     
-    // Method 2: Check parent block (if available)
+    // Method 2: Check if this block is a child of another block
+    // This is more reliable for detecting nested items
     if (block.parent && block.parent.type === 'block') {
-        return 1; // Assume nested if has parent block
+        return 1; // This block is nested under another block
     }
     
-    // Method 3: Default to top-level
+    // Method 3: Check for the presence of children in the previous block
+    // If the previous block has children and this block is one of them, it's nested
+    
+    // Default to top-level
     return 0;
 }
 
