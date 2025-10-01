@@ -193,9 +193,6 @@ function hasRelevantChangesWithTracking({ pageId, currentData, webhookType, chan
     changedPropertiesValue: changedProperties
     });
     
-    // **ADD THIS DEBUG LINE**
-    console.log('📊 changedProperties is Array?:', Array.isArray(changedProperties));
-    
     const previousState = pageStateCache.get(pageId);
     const now = Date.now();
     
@@ -669,6 +666,14 @@ function extractTextFromBlock(block, nextBlock = null, inList = false) {
     const blockType = block.type;
     const blockData = block[blockType];
     
+    // **DEBUG: Log block structure to see available properties**
+    console.log('Block structure:', {
+        type: blockType,
+        id: block.id,
+        has_children: block.has_children,
+        blockData: blockData
+    });
+
     if (!blockData.rich_text || blockData.rich_text.length === 0) {
         return '';
     }
@@ -681,6 +686,15 @@ function extractTextFromBlock(block, nextBlock = null, inList = false) {
         }
     }
     
+    // **NEW: Detect nested list items**
+    const isNested = blockData.is_nested || false; // Notion might have this property
+    const indentLevel = getIndentLevel(block); // Helper function to detect indentation
+    const isNestedItem = 
+        blockData.is_nested ||
+        blockData.indent > 0 ||
+        block.has_children && !blockData.children || // Has children but they're not in this block
+        getIndentLevel(block) >= 1;
+
     // Format based on block type
     // **IMPROVED: Only treat as list header if colon is at the VERY END**
     const trimmedText = text.trim();
@@ -699,12 +713,26 @@ function extractTextFromBlock(block, nextBlock = null, inList = false) {
         case 'heading_3':
             return `### ${text}\n\n`;
         case 'bulleted_list_item':
-            return `• ${text}\n`;
+            // **FIXED: Handle nested bullet points**
+            if (isNestedItem) {
+                return `  ◦ ${text}\n`; // Nested bullet
+            } else {
+                return `• ${text}\n`; // Top-level bullet
+            }
         case 'numbered_list_item':
-            return `1. ${text}\n`;
+            // **FIXED: Handle nested numbered lists**
+            if (isNestedItem) {
+                return `  a. ${text}\n`; // Nested items as bullets for simplicity
+            } else {
+                return `1. ${text}\n`; // Top-level numbered
+            }
         case 'to_do':
             const checked = blockData.checked ? '✅' : '☐';
-            return `${checked} ${text}\n`;
+            if (isNestedItem) {
+                return `  ${checked} ${text}\n`; // Nested to-do
+            } else {
+                return `${checked} ${text}\n`; // Top-level to-do
+            }
         case 'paragraph':
             if (isListHeader) {
                 return `${text}\n`; // Reduced spacing for list headers
@@ -717,6 +745,28 @@ function extractTextFromBlock(block, nextBlock = null, inList = false) {
         default:
             return `${text}\n\n`;
     }
+}
+
+// **NEW: Helper function to detect indentation level**
+function getIndentLevel(block) {
+    // Method 1: Check if Notion provides indentation info
+    if (block.bulleted_list_item?.indent !== undefined) {
+        return block.bulleted_list_item.indent;
+    }
+    if (block.numbered_list_item?.indent !== undefined) {
+        return block.numbered_list_item.indent;
+    }
+    if (block.to_do?.indent !== undefined) {
+        return block.to_do.indent;
+    }
+    
+    // Method 2: Check parent block (if available)
+    if (block.parent && block.parent.type === 'block') {
+        return 1; // Assume nested if has parent block
+    }
+    
+    // Method 3: Default to top-level
+    return 0;
 }
 
 function extractSelectProperty(properties, possibleNames) {
