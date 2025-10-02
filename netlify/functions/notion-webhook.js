@@ -503,66 +503,72 @@ async function extractNotionData(properties, pageId) {
         });
     });
 
-    const title = extractTitle(properties);
-    const jenis = extractSelectProperty(properties, ['Jenis', 'Category', 'Golongan']);
-    const deadline = extractDateProperty(properties, ['Deadline', 'Due Date', 'Due']);
-    const priority = extractSelectProperty(properties, ['Priority']);
-    const pageContent = await extractPageContent(pageId);
+    const blocks = await fetchPageBlocksRecursive(pageId);
 
     const extractedData = {
-        title: title,
-        content: pageContent,
-        jenis: jenis,
-        deadline: deadline,
-        priority: priority
+        title: extractTitle(properties),
+        content: await extractPageContent(pageId),
+        images: await extractImagesFromBlocks(blocks),
+        jenis: extractSelectProperty(properties, ['Jenis', 'Category', 'Golongan']),
+        deadline: extractDateProperty(properties, ['Deadline', 'Due Date', 'Due']),
+        priority: extractSelectProperty(properties, ['Priority'])
     };
     
-    console.log('📊 Final extracted data:', extractedData);
+    console.log('📊 Final extracted data:', {extractedData, imagesCount: extractedData.images.length});
     return extractedData;
 }
 
-// **NEW: Specialized extraction functions**
+// **NEW: Extract images from blocks**
+async function extractImagesFromBlocks(blocks) {
+    const images = [];
+    
+    for (const block of blocks) {
+        if (block.type === 'image' && block.image) {
+            const imageUrl = block.image.file?.url || block.image.external?.url;
+            if (imageUrl) {
+                images.push({
+                    url: imageUrl,
+                    caption: block.image.caption?.[0]?.plain_text || 'Image'
+                });
+            }
+        }
+        
+        // Recursively check child blocks
+        if (block.has_children) {
+            const childBlocks = await fetchPageBlocksRecursive(block.id);
+            const childImages = await extractImagesFromBlocks(childBlocks);
+            images.push(...childImages);
+        }
+    }
+    
+    return images;
+}
+
+// **CLEANED: Extract title from properties**
 function extractTitle(properties) {
     console.log('🔍 Searching for title property...');
     
-        // Try specific property names first
-    const specificCandidates = [
-        'Assignment Name', // Your actual property name
-        'Name', 
-        'Title', 
-        'Task Name'
-    ];
-
-    // Try different title property names and types
+    // Single unified list of title property candidates
     const titleCandidates = [
-        { name: 'Assignment Name', type: 'title' }, // Add this first since it exists
-        { name: 'Name', type: 'title' },
-        { name: 'Title', type: 'title' },
-        { name: 'Task', type: 'title' },
-        { name: 'Task Name', type: 'title' },
+        'Assignment Name', // Your actual property name (most specific first)
+        'Name',
+        'Title', 
+        'Task Name',
+        'Task'
     ];
     
-    for (const propName of specificCandidates) {
+    // Try specific property names first
+    for (const propName of titleCandidates) {
         const prop = properties[propName];
+        console.log(`Checking "${propName}":`, prop ? 'exists' : 'not found');
+        
         if (prop && prop.type === 'title' && prop.title?.[0]?.text?.content) {
             console.log(`✅ Found title in "${propName}":`, prop.title[0].text.content);
             return prop.title[0].text.content;
         }
     }
-
-    for (const candidate of titleCandidates) {
-        const prop = properties[candidate.name];
-        console.log(`Checking "${candidate.name}":`, prop ? 'exists' : 'not found');
-        
-        if (prop && prop.type === candidate.type) {
-            if (candidate.type === 'title' && prop.title?.[0]?.text?.content) {
-                console.log(`✅ Found title in "${candidate.name}.title":`, prop.title[0].text.content);
-                return prop.title[0].text.content;
-            }
-        }
-    }
     
-    // If no title property found, try to find any title-like property
+    // Fallback: search for any title property
     console.log('🔍 Searching for any title property...');
     for (const propName in properties) {
         const prop = properties[propName];
@@ -620,6 +626,38 @@ async function extractPageContent(pageId) {
     }
 }
 
+// **COMPREHENSIVE: Handle both Notion links and auto-detected URLs**
+function processTextWithLinks(richTextArray) {
+    let result = '';
+    
+    for (const richText of richTextArray) {
+        if (richText.plain_text) {
+            if (richText.href) {
+                // Use Notion's link formatting
+                result += `[${richText.plain_text}](${richText.href})`;
+            } else if (richText.annotations?.code) {
+                // Preserve code formatting
+                result += `\`${richText.plain_text}\``;
+            } else {
+                result += richText.plain_text;
+            }
+        }
+    }
+    
+    // Also auto-detect any missed URLs in the combined text
+    return makeUrlsClickable(result);
+}
+
+// **SUPPORT: Auto-detect URLs in plain text**
+function makeUrlsClickable(text) {
+    const urlRegex = /(https?:\/\/[^\s<]+[^<.,:;"')\]\s])/g;
+    
+    return text.replace(urlRegex, (url) => {
+        const cleanUrl = url.replace(/[.,;:]$/, '');
+        return `[${cleanUrl}](${cleanUrl})`;
+    });
+}
+
 // **UPDATED: Format block with proper indentation and list header detection**
 function formatBlockWithIndent(block, nextBlock = null) {
     if (!block || !block.type) return '';
@@ -632,12 +670,7 @@ function formatBlockWithIndent(block, nextBlock = null) {
         return '';
     }
     
-    let text = '';
-    for (const richText of blockData.rich_text) {
-        if (richText.plain_text) {
-            text += richText.plain_text;
-        }
-    }
+    let text = processTextWithLinks(blockData.rich_text);
     
     const indent = '  '.repeat(indentLevel);
     
@@ -838,6 +871,28 @@ async function sendToDiscord(pageId, notionData, webhookType) {
         const channel = await client.channels.fetch(process.env.DISCORD_CHANNEL_ID);
         const messageContent = formatMessageContent(notionData, webhookType);
         
+        // **CREATE EMBEDS FOR IMAGES**
+        const embeds = [];
+        if (notionData.images && notionData.images.length > 0) {
+            console.log(`🖼️ Creating ${notionData.images.length} image embeds`);
+            
+            // Create an embed for each image (Discord allows up to 10 embeds per message)
+            notionData.images.slice(0, 10).forEach((image, index) => {
+                const embed = new EmbedBuilder()
+                    .setColor(0x318595)
+                    .setTitle(`📷 Image ${index + 1}`)
+                    .setURL(image.url)
+                    .setImage(image.url)
+                    .setTimestamp();
+                
+                if (image.caption) {
+                    embed.setDescription(image.caption);
+                }
+                
+                embeds.push(embed);
+            });
+        }
+
         // **CHECK BOTH SOURCES FOR MESSAGE ID**
         const storedMessageId = await getStoredMessageId(pageId);
         
@@ -880,9 +935,12 @@ async function sendToDiscord(pageId, notionData, webhookType) {
             }
         }
         
-        // **CREATE NEW MESSAGE**
-        console.log('📤 Creating new Discord message...');
-        const message = await channel.send(messageContent);
+        // **CREATE NEW MESSAGE WITH EMBEDS**
+        console.log('📤 Creating new Discord message (with embeds)...');
+        const message = await channel.send({
+            content: messageContent,
+            embeds: embeds
+        });
         
         // **STORE THE NEW MESSAGE ID**
         await storeMessageId(pageId, message.id);
