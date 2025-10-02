@@ -205,12 +205,11 @@ function hasRelevantChangesWithTracking({ pageId, currentData, webhookType, chan
     
     // For new pages, always process
     if (!previousState) {
-        // Only treat as "new" if this is a creation webhook
-        const shouldProcessNew = webhookType === 'page.created';
-        // Always cache the state, but only return true for new creations
-        pageStateCache.set(pageId, { ...currentData, timestamp: now });
-        console.log(`🆕 New page detected: ${shouldProcessNew ? '✅ PROCESS' : '🚫 IGNORE (existing page)'}`);
-        return shouldProcessNew;
+        pageStateCache.set(pageId, {
+            ...currentData,
+            timestamp: now
+        });
+        return true;
     }
     
     // **NEW: Special handling for content updates**
@@ -659,6 +658,56 @@ function makeUrlsClickable(text) {
     });
 }
 
+// **NEW: Detect and format code blocks**
+function detectCodeBlockLanguage(text) {
+    // Simple language detection based on common patterns
+    if (text.includes('function') || text.includes('const ') || text.includes('let ') || text.includes('var ') || text.includes('=>')) {
+        return 'javascript';
+    } else if (text.includes('def ') || text.includes('import ') || text.includes('print(') || text.includes('class ')) {
+        return 'python';
+    } else if (text.includes('public class') || text.includes('System.out.') || text.includes('import java.')) {
+        return 'java';
+    } else if (text.includes('<?php') || text.includes('echo ') || text.includes('$')) {
+        return 'php';
+    } else if (text.includes('#include') || text.includes('printf(') || text.includes('cout ')) {
+        return 'cpp';
+    } else if (text.includes('using ') || text.includes('Console.') || text.includes('public static')) {
+        return 'csharp';
+    } else if (text.includes('<!DOCTYPE') || text.includes('<html') || text.includes('<div')) {
+        return 'html';
+    } else if (text.includes('SELECT ') || text.includes('FROM ') || text.includes('WHERE ')) {
+        return 'sql';
+    } else if (text.includes('package ') || text.includes('import "') || text.includes('func ')) {
+        return 'go';
+    } else {
+        return ''; // No specific language
+    }
+}
+
+// **NEW: Format code block for Discord**
+function formatCodeBlock(block) {
+    const codeData = block.code;
+    if (!codeData.rich_text || codeData.rich_text.length === 0) {
+        return '';
+    }
+    
+    // Extract code text
+    let codeText = '';
+    for (const richText of codeData.rich_text) {
+        if (richText.plain_text) {
+            codeText += richText.plain_text;
+        }
+    }
+    
+    if (!codeText.trim()) return '';
+    
+    // Detect language
+    const language = codeData.language || detectCodeBlockLanguage(codeText);
+    
+    // Format for Discord code block
+    return `\`\`\`${language}\n${codeText}\n\`\`\`\n\n`;
+}
+
 // **UPDATED: Format block with proper indentation and list header detection**
 function formatBlockWithIndent(block, nextBlock = null) {
     if (!block || !block.type) return '';
@@ -666,6 +715,10 @@ function formatBlockWithIndent(block, nextBlock = null) {
     const blockType = block.type;
     const blockData = block[blockType];
     const indentLevel = block.indent_level || 0;
+
+    if (blockType === 'code') {
+        return formatCodeBlock(block);
+    }
 
     if (!blockData.rich_text || blockData.rich_text.length === 0) {
         return '';
