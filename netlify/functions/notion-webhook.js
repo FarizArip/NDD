@@ -205,11 +205,12 @@ function hasRelevantChangesWithTracking({ pageId, currentData, webhookType, chan
     
     // For new pages, always process
     if (!previousState) {
-        pageStateCache.set(pageId, {
-            ...currentData,
-            timestamp: now
-        });
-        return true;
+        // Only treat as "new" if this is a creation webhook
+        const shouldProcessNew = webhookType === 'page.created';
+        // Always cache the state, but only return true for new creations
+        pageStateCache.set(pageId, { ...currentData, timestamp: now });
+        console.log(`🆕 New page detected: ${shouldProcessNew ? '✅ PROCESS' : '🚫 IGNORE (existing page)'}`);
+        return shouldProcessNew;
     }
     
     // **NEW: Special handling for content updates**
