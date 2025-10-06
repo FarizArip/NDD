@@ -632,14 +632,43 @@ function processTextWithLinks(richTextArray) {
     
     for (const richText of richTextArray) {
         if (richText.plain_text) {
+            let formattedText = richText.plain_text;
+            const annotations = richText.annotations || {};
+            
+            // **APPLY DISCORD MARKDOWN FORMATTING**
+            // Note: Order matters! Apply from innermost to outermost formatting
+            
+            // 1. Code (monospace) - innermost
+            if (annotations.code) {
+                formattedText = `\`${formattedText}\``;
+            }
+            
+            // 2. Italic
+            if (annotations.italic) {
+                formattedText = `*${formattedText}*`;
+            }
+            
+            // 3. Bold
+            if (annotations.bold) {
+                formattedText = `**${formattedText}**`;
+            }
+            
+            // 4. Strikethrough
+            if (annotations.strikethrough) {
+                formattedText = `~~${formattedText}~~`;
+            }
+            
+            // 5. Underline
+            if (annotations.underline) {
+             
+                formattedText = `__${formattedText}__`;
+            }
+            
+            // Handle links (applied after all text formatting)
             if (richText.href) {
-                // Use Notion's link formatting
-                result += `[${richText.plain_text}](${richText.href})`;
-            } else if (richText.annotations?.code) {
-                // Preserve code formatting
-                result += `\`${richText.plain_text}\``;
+                result += `[${formattedText}](${richText.href})`;
             } else {
-                result += richText.plain_text;
+                result += formattedText;
             }
         }
     }
