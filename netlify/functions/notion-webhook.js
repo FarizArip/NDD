@@ -268,7 +268,7 @@ function hasRelevantChangesWithTracking({ pageId, currentData, webhookType, chan
 function getChangedProperties(webhookData) {
     try {
         // Check if properties_updated exists and is an object
-        if (webhookData.properties_updated && typeof webhookData.properties_updated === 'object') {
+        if (webhookData.type === 'page.properties_updated' && webhookData.properties_updated) {
             const keys = Object.keys(webhookData.properties_updated);
             console.log(`📊 Changed properties detected:`, keys);
             return keys;
@@ -975,7 +975,7 @@ const COURSE_CONFIGS = {
 ${notionData.formattedContent}
 
 ### **__----- :calendar_spiral:  Deadline ${notionData.deadlineText}  :calendar_spiral: -----__**
-### **__----- ${isNew ? '🆕 *Tugas Baru* 🆕' : '✏️ *Tugas Update* ✏️'} -----__**
+### **__----- ${notionData.isNew ? '🆕 *Tugas Baru* 🆕' : '✏️ *Tugas Update* ✏️'} -----__**
     `.trim()
     },
     '145f2429-0609-803b-9dee-d8284ee8b417': {
@@ -988,7 +988,7 @@ ${notionData.formattedContent}
 ${notionData.formattedContent}
 
 ### **__----- :calendar_spiral:  Pelaksanaan/Deadline ${notionData.deadlineText}  :calendar_spiral: -----__**
-### **__----- ${isNew ? '🆕 *Ulangan Baru* 🆕' : '✏️ *Ulangan Update* ✏️'} -----__**
+### **__----- ${notionData.isNew ? '🆕 *Ulangan Baru* 🆕' : '✏️ *Ulangan Update* ✏️'} -----__**
     `.trim()
     },
     '145f2429-0609-8085-9dea-ca0505ad77da': {
@@ -1001,7 +1001,7 @@ ${notionData.formattedContent}
 ${notionData.formattedContent}
 
 ### **__----- :calendar_spiral:  Pelaksanaan/Deadline ${notionData.deadlineText}  :calendar_spiral: -----__**
-### **__----- ${isNew ? '🆕 *Ulangan Baru* 🆕' : '✏️ *Tugas Update* ✏️'} -----__**
+### **__----- ${notionData.isNew ? '🆕 *Ulangan Baru* 🆕' : '✏️ *Tugas Update* ✏️'} -----__**
     `.trim()
     },
     // Add more courses as needed
