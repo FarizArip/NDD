@@ -983,7 +983,7 @@ ${notionData.formattedContent}
         color: 0x316D95, // Dark Moderate Blue
         emoji: '🗂',
         customFormat: (notionData, courseConfig) => `
-# **__----- :${courseConfig.emoji}: ${notionData.title} (UTS) (${notionData.jenisText}) :${courseConfig.emoji}: -----__**
+# **__----- ${courseConfig.emoji} ${notionData.title} (UTS) (${notionData.jenisText}) ${courseConfig.emoji} -----__**
 
 ${notionData.formattedContent}
 
@@ -996,7 +996,7 @@ ${notionData.formattedContent}
         color: 0x316D95, // Dark Moderate Blue
         emoji: '🗂',
         customFormat: (notionData, courseConfig) => `
-# **__----- :${courseConfig.emoji}: ${notionData.title} (UAS) (${notionData.jenisText}) :${courseConfig.emoji}: -----__**
+# **__----- ${courseConfig.emoji} ${notionData.title} (UAS) (${notionData.jenisText}) ${courseConfig.emoji} -----__**
 
 ${notionData.formattedContent}
 
