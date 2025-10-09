@@ -16,7 +16,7 @@ const TRANSMISSION_CONFIG = {
     disabledStatuses: ['Done', 'Cancelled', 'Out'], // Statuses that should NOT send messages
     
     // Only these property changes should trigger updates
-    relevantProperties: ['Assignment Name', 'Jenis', 'Deadline', 'Priority', 'Content'],
+    relevantProperties: ['Assignment Name', 'Jenis', 'Deadline', 'Priority', 'Content', 'Courses'],
     
     // Webhook types that should be processed
     allowedWebhookTypes: [
@@ -325,6 +325,12 @@ function hasRelevantChanges(previousData, currentData, changedProperties = []) {
         changedProperties = [];
     }
     
+    // **NEW: Course changes are always relevant (they change the message format)**
+    if (changedProperties.includes('Courses')) {
+        console.log('📚 Course relation changed - this is always relevant');
+        return true;
+    }
+
     // If we don't know what changed, check all relevant properties
     if (changedProperties.length === 0) {
         const relevantProps = TRANSMISSION_CONFIG.relevantProperties;
@@ -511,11 +517,25 @@ async function extractNotionData(properties, pageId) {
         images: await extractImagesFromBlocks(blocks),
         jenis: extractSelectProperty(properties, ['Jenis', 'Category', 'Golongan']),
         deadline: extractDateProperty(properties, ['Deadline', 'Due Date', 'Due']),
-        priority: extractSelectProperty(properties, ['Priority'])
+        priority: extractSelectProperty(properties, ['Priority']),
+        courses: extractCourses(properties)
     };
     
     console.log('📊 Final extracted data:', {extractedData, imagesCount: extractedData.images.length});
     return extractedData;
+}
+
+// **NEW: Extract courses from relation property**
+function extractCourses(properties) {
+    const courseProperty = properties['Courses'] || properties['Course'];
+    
+    if (courseProperty && courseProperty.type === 'relation') {
+        console.log('📚 Found courses:', courseProperty.relation);
+        return courseProperty.relation.map(course => course.id);
+    }
+    
+    console.log('📚 No courses found');
+    return [];
 }
 
 // **NEW: Extract images from blocks**
@@ -942,6 +962,62 @@ async function getStoredMessageId(notionPageId) {
     }
 }
 
+// **NEW: Course-specific message configurations**
+const COURSE_CONFIGS = {
+    // Course ID: Configuration for that course
+    '14ff2429-0609-80dd-bd6e-f81b65a153c8': { // Your specific course ID
+        name: 'Short Term',
+        color: 0x318595, // PNJ Blue
+        emoji: '📝',
+        customFormat: (notionData) => `
+# **__----- :sparkles: ${notionData.title} (${notionData.jenisText}) :sparkles: -----__**
+
+${notionData.formattedContent}
+
+### **__----- :calendar_spiral:  Deadline ${notionData.deadlineText}  :calendar_spiral: -----__**
+### **__----- ${isNew ? '🆕 *Tugas Baru* 🆕' : '✏️ *Tugas Update* ✏️'} -----__**
+    `.trim()
+    },
+    '145f2429-0609-803b-9dee-d8284ee8b417': {
+        name: 'UTS',
+        color: 0x316D95, // Dark Moderate Blue
+        emoji: '🗂',
+        customFormat: (notionData, courseConfig) => `
+# **__----- :${courseConfig.emoji}: ${notionData.title} (UTS) (${notionData.jenisText}) :${courseConfig.emoji}: -----__**
+
+${notionData.formattedContent}
+
+### **__----- :calendar_spiral:  Pelaksanaan/Deadline ${notionData.deadlineText}  :calendar_spiral: -----__**
+### **__----- ${isNew ? '🆕 *Ulangan Baru* 🆕' : '✏️ *Ulangan Update* ✏️'} -----__**
+    `.trim()
+    },
+    '145f2429-0609-8085-9dea-ca0505ad77da': {
+        name: 'UAS',
+        color: 0x316D95, // Dark Moderate Blue
+        emoji: '🗂',
+        customFormat: (notionData, courseConfig) => `
+# **__----- :${courseConfig.emoji}: ${notionData.title} (UAS) (${notionData.jenisText}) :${courseConfig.emoji}: -----__**
+
+${notionData.formattedContent}
+
+### **__----- :calendar_spiral:  Pelaksanaan/Deadline ${notionData.deadlineText}  :calendar_spiral: -----__**
+### **__----- ${isNew ? '🆕 *Ulangan Baru* 🆕' : '✏️ *Tugas Update* ✏️'} -----__**
+    `.trim()
+    },
+    // Add more courses as needed
+};
+
+// **NEW: Get course configuration**
+function getCourseConfig(courseIds) {
+    if (!courseIds || courseIds.length === 0) {
+        return null;
+    }
+    
+    // Use the first course for configuration (you could handle multiple courses if needed)
+    const courseId = courseIds[0];
+    return COURSE_CONFIGS[courseId] || null;
+}
+
 // **UPDATED: Send to Discord**
 async function sendToDiscord(pageId, notionData, webhookType) {
     try {
@@ -954,15 +1030,18 @@ async function sendToDiscord(pageId, notionData, webhookType) {
         const channel = await client.channels.fetch(process.env.DISCORD_CHANNEL_ID);
         const messageContent = formatMessageContent(notionData, webhookType);
         
-        // **CREATE EMBEDS FOR IMAGES**
+        // **CREATE EMBEDS FOR IMAGES WITH COURSE-SPECIFIC COLORS**
         const embeds = [];
         if (notionData.images && notionData.images.length > 0) {
             console.log(`🖼️ Creating ${notionData.images.length} image embeds`);
             
-            // Create an embed for each image (Discord allows up to 10 embeds per message)
+            // **NEW: Get course configuration for embed colors**
+            const courseConfig = getCourseConfig(notionData.courses);
+            const embedColor = courseConfig?.color || 0x318595; // Default PNJ blue
+            
             notionData.images.slice(0, 10).forEach((image, index) => {
                 const embed = new EmbedBuilder()
-                    .setColor(0x318595)
+                    .setColor(embedColor) // **COURSE-SPECIFIC COLOR**
                     .setTitle(`📷 Image ${index + 1}`)
                     .setURL(image.url)
                     .setImage(image.url)
@@ -1038,12 +1117,12 @@ async function sendToDiscord(pageId, notionData, webhookType) {
 function formatMessageContent(notionData, webhookType) {
     const isNew = webhookType.includes('.created') || webhookType.includes('_added');
     
-    let deadlineText = 'No deadline';
+    let deadlineText = 'tidak/belum ada';
     if (notionData.deadline) {
         deadlineText = formatDeadline(notionData.deadline);
     }
 
-    let jenisText = 'Not set';
+    let jenisText = 'Belum diketahui';
     if (notionData.jenis) {
         jenisText = notionData.jenis;
     }
@@ -1054,10 +1133,30 @@ function formatMessageContent(notionData, webhookType) {
             .split('\n')
             .map(line => line === '' ? '> ' : `> ${line}`)
             .join('\n')
-        : 'No content available';
+        : 'Belum ada konten';
     
+    // **NEW: Get course-specific configuration**
+    const courseConfig = getCourseConfig(notionData.courses);
+
+    const messageData = {
+        title: notionData.title,
+        formattedContent: formattedContent,
+        deadlineText: deadlineText,
+        jenisText: jenisText,
+        isNew: isNew,
+        emoji: courseConfig?.emoji || '📝',
+        courseName: courseConfig?.name || 'Short Term'
+    };
+    
+    // **USE COURSE-SPECIFIC FORMAT IF AVAILABLE, OTHERWISE USE DEFAULT**
+    if (courseConfig && courseConfig.customFormat) {
+        console.log(`🎨 Using custom format for course: ${courseConfig.name}`);
+        return courseConfig.customFormat(messageData, courseConfig);
+    }
+    
+    // **DEFAULT FORMAT**
     return `
-# **__----- :sparkles: ${notionData.title} (${jenisText}) :sparkles: -----__**
+# **__----- :sparkles: ${messageData.title} (${jenisText}) :sparkles: -----__**
 
 ${formattedContent}
 
