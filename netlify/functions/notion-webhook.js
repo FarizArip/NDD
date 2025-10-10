@@ -215,15 +215,19 @@ function hasRelevantChangesWithTracking({ pageId, currentData, webhookType, chan
     // **NEW: Special handling for content updates**
     if (webhookType === 'page.content_updated') {
         const contentChanged = previousState.content !== currentData.content;
-        console.log(`📝 Content change detected: ${contentChanged ? '✅ CHANGED' : '🚫 UNCHANGED'}`);
+        const imagesChanged = haveImagesChanged(previousState.images, currentData.images);
+        console.log(`📝 Content change detected: ${contentChanged ? '✅ CHANGED' : '🚫 UNCHANGED'}, Images: ${imagesChanged ? '✅' : '🚫'}`);
         
-        if (contentChanged) {
+        
+        const hasChanges = contentChanged || imagesChanged;
+
+        if (hasChanges) {
             pageStateCache.set(pageId, {
                 ...currentData,
                 timestamp: now
             });
         }
-        return contentChanged;
+        return HasChanges;
     }
 
     // If we know what properties changed, check only those
@@ -348,6 +352,22 @@ function hasRelevantChanges(previousData, currentData, changedProperties = []) {
     
     console.log(`📊 Relevant changes check: ${hasRelevantChange ? '✅ RELEVANT' : '🚫 IRRELEVANT'}`);
     return hasRelevantChange;
+}
+
+// **NEW: Check if images have changed**
+function haveImagesChanged(previousImages, currentImages) {
+    if (!previousImages && currentImages?.length > 0) return true;
+    if (!currentImages && previousImages?.length > 0) return true;
+    if (!previousImages && !currentImages) return false;
+    
+    // Compare image counts
+    if (previousImages.length !== currentImages.length) return true;
+    
+    // Compare image URLs
+    const prevUrls = previousImages.map(img => img.url).sort();
+    const currUrls = currentImages.map(img => img.url).sort();
+    
+    return JSON.stringify(prevUrls) !== JSON.stringify(currUrls);
 }
 
 // **NEW: Check if it's a page-related webhook**
