@@ -1075,6 +1075,19 @@ async function sendToDiscord(pageId, notionData, webhookType) {
             });
         }
 
+        // **NEW: COMPREHENSIVE DEBUG LOGGING**
+        console.log('🔍 DEBUG - Message details:', {
+            contentLength: messageContent.length,
+            embedCount: embeds.length,
+            embeds: embeds.map((embed, index) => ({
+                index: index,
+                title: embed.data.title,
+                hasImage: !!embed.data.image,
+                imageUrl: embed.data.image?.url ? '✅ URL PRESENT' : '❌ NO URL',
+                url: embed.data.url
+            }))
+        });
+
         // **CHECK BOTH SOURCES FOR MESSAGE ID**
         const storedMessageId = await getStoredMessageId(pageId);
         
@@ -1083,55 +1096,114 @@ async function sendToDiscord(pageId, notionData, webhookType) {
         // **TRY TO UPDATE EXISTING MESSAGE**
         const messageId = storedMessageId || notionData.discordMessageId;
         
-        if (messageId) {
-            try {
-                console.log('📝 Attempting to fetch message:', messageId);
+        // if (messageId) {
+        //     try {
+        //         console.log('📝 Attempting to fetch message:', messageId);
                 
-                // **FIX: Proper message fetching with error handling**
-                const message = await channel.messages.fetch(messageId);
-                console.log('✅ Message fetched successfully:', { 
-                    id: message.id, 
-                    content: message.content.substring(0, 50) + '...',
-                    hasEdit: typeof message.edit === 'function'
-                });
+        //         // **FIX: Proper message fetching with error handling**
+        //         const message = await channel.messages.fetch(messageId);
+        //         console.log('✅ Message fetched successfully:', { 
+        //             id: message.id, 
+        //             content: message.content.substring(0, 50) + '...',
+        //             hasEdit: typeof message.edit === 'function'
+        //         });
                 
-                // **FIX: Verify the message object has edit method**
-                if (typeof message.edit === 'function') {
-                    const updatedMessage = await message.edit(messageContent);
-                    console.log('✅ Message updated successfully! ID:', updatedMessage.id);
-                    return;
-                } else {
-                    console.error('❌ Message object missing edit method:', message);
-                    throw new Error('Message object does not have edit method');
-                }
+        //         // **FIX: Verify the message object has edit method**
+        //         if (typeof message.edit === 'function') {
+        //             const updatedMessage = await message.edit(messageContent);
+        //             console.log('✅ Message updated successfully! ID:', updatedMessage.id);
+        //             return;
+        //         } else {
+        //             console.error('❌ Message object missing edit method:', message);
+        //             throw new Error('Message object does not have edit method');
+        //         }
                 
-            } catch (error) {
-                if (error.code === 10008) { // Unknown message (was deleted)
-                    console.log('🗑️ Message was deleted, creating new one');
-                    await storeMessageId(pageId, null);
-                    // Fall through to create new message
-                } else {
-                    console.error('❌ Error updating message:', error);
-                    // Fall through to create new message on error
-                }
-            }
-        }
-        
-        // **DEBUG: Add detailed embed logging**
-        console.log('🔍 Embeds being sent:', {
-            embedCount: embeds.length,
-            embeds: embeds.map(embed => ({
-                title: embed.data.title,
-                image: embed.data.image?.url ? '✅ HAS IMAGE' : '❌ NO IMAGE',
-                url: embed.data.url
-            }))
-        });
+        //     } catch (error) {
+        //         if (error.code === 10008) { // Unknown message (was deleted)
+        //             console.log('🗑️ Message was deleted, creating new one');
+        //             await storeMessageId(pageId, null);
+        //             // Fall through to create new message
+        //         } else {
+        //             console.error('❌ Error updating message:', error);
+        //             // Fall through to create new message on error
+        //         }
+        //     }
+        // }
+
+        //         if (messageId) {
+        //     try {
+        //         console.log('📝 Attempting to fetch message:', messageId);
+        //         const message = await channel.messages.fetch(messageId);
+                
+        //         if (typeof message.edit === 'function') {
+        //             console.log('🔄 DEBUG - Editing message with:', {
+        //                 contentLength: messageContent.length,
+        //                 embedCount: embeds.length,
+        //                 embedsData: embeds.length > 0 ? 'PRESENT' : 'MISSING'
+        //             });
+                    
+        //             const updatedMessage = await message.edit({
+        //                 content: messageContent,
+        //                 embeds: embeds
+        //             });
+                    
+        //             // **NEW: CHECK WHAT DISCORD ACTUALLY RETURNED**
+        //             console.log('✅ DEBUG - Message edit response:', {
+        //                 id: updatedMessage.id,
+        //                 contentLength: updatedMessage.content.length,
+        //                 embedsCount: updatedMessage.embeds?.length || 0,
+        //                 embeds: updatedMessage.embeds?.map(embed => ({
+        //                     title: embed.title,
+        //                     type: embed.type,
+        //                     hasImage: !!embed.image
+        //                 })) || 'NO EMBEDS'
+        //             });
+                    
+        //             console.log('✅ Message updated successfully! ID:', updatedMessage.id);
+        //             return;
+        //         } else {
+        //             throw new Error('Message object does not have edit method');
+        //         }
+                
+        //     } catch (error) {
+        //         if (error.code === 10008) {
+        //             console.log('🗑️ Message was deleted, creating new one');
+        //             await storeMessageId(pageId, null);
+        //             // Fall through to create new message
+        //         } else {
+        //             console.error('❌ Error updating message:', error);
+        //         }
+        //     }
+        // }
         
         // **CREATE NEW MESSAGE WITH EMBEDS**
-        console.log('📤 Creating new Discord message (with embeds)...');
-        const message = await channel.send({
-            content: messageContent,
-            embeds: embeds
+        // console.log('📤 Creating new Discord message (with embeds)...');
+        // const message = await channel.send({
+        //     content: messageContent,
+        //     embeds: embeds
+        // });
+
+        console.log('🔄 TEMPORARY: Forcing new message creation (bypassing edit)');
+const message = await channel.send({
+    content: messageContent,
+    embeds: embeds
+});
+
+console.log('✅ TEMPORARY: New message created with embeds:', {
+    id: message.id,
+    embedsCount: message.embeds?.length || 0
+});
+
+                // **NEW: CHECK NEW MESSAGE RESPONSE**
+        console.log('✅ DEBUG - New message created:', {
+            id: message.id,
+            contentLength: message.content.length,
+            embedsCount: message.embeds?.length || 0,
+            embeds: message.embeds?.map(embed => ({
+                title: embed.title,
+                type: embed.type,
+                hasImage: !!embed.image
+            })) || 'NO EMBEDS'
         });
 
         console.log('✅ Message created with embeds:', {
