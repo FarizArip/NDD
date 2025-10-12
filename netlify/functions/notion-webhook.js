@@ -1117,11 +1117,27 @@ async function sendToDiscord(pageId, notionData, webhookType) {
             }
         }
         
+        // **DEBUG: Add detailed embed logging**
+        console.log('🔍 Embeds being sent:', {
+            embedCount: embeds.length,
+            embeds: embeds.map(embed => ({
+                title: embed.data.title,
+                image: embed.data.image?.url ? '✅ HAS IMAGE' : '❌ NO IMAGE',
+                url: embed.data.url
+            }))
+        });
+        
         // **CREATE NEW MESSAGE WITH EMBEDS**
         console.log('📤 Creating new Discord message (with embeds)...');
         const message = await channel.send({
             content: messageContent,
             embeds: embeds
+        });
+
+        console.log('✅ Message created with embeds:', {
+        id: message.id,
+        embedsCount: message.embeds?.length || 0,
+        hasEmbeds: !!message.embeds
         });
         
         // **STORE THE NEW MESSAGE ID**
