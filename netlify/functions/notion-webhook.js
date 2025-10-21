@@ -985,7 +985,7 @@ async function getStoredMessageId(notionPageId) {
 // **NEW: Course-specific message configurations**
 const COURSE_CONFIGS = {
     // Course ID: Configuration for that course
-    '14ff2429-0609-80dd-bd6e-f81b65a153c8': { // Your specific course ID
+    '293f2429-0609-806e-8ca1-c647b86b5815': { // Your specific course ID
         name: 'Short Term',
         color: 0x318595, // PNJ Blue
         emoji: '📝',
@@ -998,7 +998,7 @@ ${notionData.formattedContent}
 ### **__----- ${notionData.isNew ? '🆕 *Tugas Baru* 🆕' : '✏️ *Tugas Update* ✏️'} -----__**
     `.trim()
     },
-    '145f2429-0609-803b-9dee-d8284ee8b417': {
+    '293f2429-0609-80e6-babe-c3eaf1b456e5': {
         name: 'UTS',
         color: 0x316D95, // Dark Moderate Blue
         emoji: '🗂',
@@ -1011,7 +1011,7 @@ ${notionData.formattedContent}
 ### **__----- ${notionData.isNew ? '🆕 *Ulangan Baru* 🆕' : '✏️ *Ulangan Update* ✏️'} -----__**
     `.trim()
     },
-    '145f2429-0609-8085-9dea-ca0505ad77da': {
+    '293f2429-0609-801c-ba8c-e4feceab21f9': {
         name: 'UAS',
         color: 0x316D95, // Dark Moderate Blue
         emoji: '🗂',
