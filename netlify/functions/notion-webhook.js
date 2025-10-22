@@ -1075,19 +1075,6 @@ async function sendToDiscord(pageId, notionData, webhookType) {
             });
         }
 
-        // **NEW: COMPREHENSIVE DEBUG LOGGING**
-        // console.log('🔍 DEBUG - Message details:', {
-        //     contentLength: messageContent.length,
-        //     embedCount: embeds.length,
-        //     embeds: embeds.map((embed, index) => ({
-        //         index: index,
-        //         title: embed.data.title,
-        //         hasImage: !!embed.data.image,
-        //         imageUrl: embed.data.image?.url ? '✅ URL PRESENT' : '❌ NO URL',
-        //         url: embed.data.url
-        //     }))
-        // });
-
         // **CHECK BOTH SOURCES FOR MESSAGE ID**
         const storedMessageId = await getStoredMessageId(pageId);
         
@@ -1130,83 +1117,17 @@ async function sendToDiscord(pageId, notionData, webhookType) {
             }
         }
 
-        //         if (messageId) {
-        //     try {
-        //         console.log('📝 Attempting to fetch message:', messageId);
-        //         const message = await channel.messages.fetch(messageId);
-                
-        //         if (typeof message.edit === 'function') {
-        //             console.log('🔄 DEBUG - Editing message with:', {
-        //                 contentLength: messageContent.length,
-        //                 embedCount: embeds.length,
-        //                 embedsData: embeds.length > 0 ? 'PRESENT' : 'MISSING'
-        //             });
-                    
-        //             const updatedMessage = await message.edit({
-        //                 content: messageContent,
-        //                 embeds: embeds
-        //             });
-                    
-        //             // **NEW: CHECK WHAT DISCORD ACTUALLY RETURNED**
-        //             console.log('✅ DEBUG - Message edit response:', {
-        //                 id: updatedMessage.id,
-        //                 contentLength: updatedMessage.content.length,
-        //                 embedsCount: updatedMessage.embeds?.length || 0,
-        //                 embeds: updatedMessage.embeds?.map(embed => ({
-        //                     title: embed.title,
-        //                     type: embed.type,
-        //                     hasImage: !!embed.image
-        //                 })) || 'NO EMBEDS'
-        //             });
-                    
-        //             console.log('✅ Message updated successfully! ID:', updatedMessage.id);
-        //             return;
-        //         } else {
-        //             throw new Error('Message object does not have edit method');
-        //         }
-                
-        //     } catch (error) {
-        //         if (error.code === 10008) {
-        //             console.log('🗑️ Message was deleted, creating new one');
-        //             await storeMessageId(pageId, null);
-        //             // Fall through to create new message
-        //         } else {
-        //             console.error('❌ Error updating message:', error);
-        //         }
-        //     }
-        // }
+        // Only create embeds if there are 3 or fewer images
+        // Otherwise, just send the message without embeds
+        const safeEmbeds = notionData.images.length <= 3 ? embeds : [];
+        console.log(`🖼️ ${safeEmbeds.length > 0 ? 'Sending with embeds' : 'Too many images, skipping embeds'}`);
         
         // **CREATE NEW MESSAGE WITH EMBEDS**
-        console.log('📤 Creating new Discord message (with embeds)...');
+        console.log('📤 Creating new Discord message...');
         const message = await channel.send({
             content: messageContent,
-            embeds: embeds
+            embeds: safeEmbeds
         });
-
-        // DEBUG
-        // console.log('🔄 TEMPORARY: Forcing new message creation (bypassing edit)');
-        // const message = await channel.send({
-        //     content: messageContent,
-        //     embeds: embeds
-        // });
-
-        // **NEW: CHECK NEW MESSAGE RESPONSE**
-        // console.log('✅ DEBUG - New message created:', {
-        //     id: message.id,
-        //     contentLength: message.content.length,
-        //     embedsCount: message.embeds?.length || 0,
-        //     embeds: message.embeds?.map(embed => ({
-        //         title: embed.title,
-        //         type: embed.type,
-        //         hasImage: !!embed.image
-        //     })) || 'NO EMBEDS'
-        // });
-
-        // console.log('✅ Message created with embeds:', {
-        // id: message.id,
-        // embedsCount: message.embeds?.length || 0,
-        // hasEmbeds: !!message.embeds
-        // });
         
         // **STORE THE NEW MESSAGE ID**
         await storeMessageId(pageId, message.id);
@@ -1267,7 +1188,7 @@ ${formattedContent}
 ### **__----- :calendar_spiral:  Deadline ${deadlineText}  :calendar_spiral: -----__**
 ### **__----- ${isNew ? '🆕 *Tugas Baru* 🆕' : '✏️ *Tugas Update* ✏️'} -----__**
     `.trim();
-} //**Page ID:** \`${pageId}\` // **Webhook Type:** ${webhookType}
+}
 
 // **ADD THIS NEW FUNCTION:**
 function formatDeadline(deadlineString) {
