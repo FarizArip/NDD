@@ -12,7 +12,7 @@ const processedPages = new Set(); // This will only work per function instance
 // Add these configuration constants at the top
 const TRANSMISSION_CONFIG = {
     // Only send messages when these select values are chosen
-    enabledStatuses: ['PNJ', 'Ulangan', 'Projek'], // Add your desired statuses
+    enabledStatuses: ['PNJ', 'Ulangan', 'Proyek'], // Add your desired statuses
     disabledStatuses: ['Done', 'Cancelled', 'Out'], // Statuses that should NOT send messages
     
     // Only these property changes should trigger updates
