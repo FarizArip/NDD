@@ -1190,7 +1190,6 @@ ${formattedContent}
     `.trim();
 }
 
-// **ADD THIS NEW FUNCTION:**
 function formatDeadline(deadlineString) {
     if (!deadlineString) return 'No deadline';
     
@@ -1202,6 +1201,18 @@ function formatDeadline(deadlineString) {
             return 'Invalid deadline';
         }
         
+        const isMidnight = date.getTime() === new Date(date).setHours(0, 0, 0, 0);
+
+        if (!isMidnight) {
+            return date.toLocaleString('id-ID, {
+                weekday: 'long,
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            }).replace(',', ' -');
+        }
         // Format: "Saturday, September 27, 2025"
         return date.toLocaleDateString('id-ID', {
             weekday: 'long',
