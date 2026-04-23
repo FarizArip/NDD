@@ -1204,8 +1204,8 @@ function formatDeadline(deadlineString) {
         const isMidnight = date.getTime() === new Date(date).setHours(0, 0, 0, 0);
 
         if (!isMidnight) {
-            return date.toLocaleString('id-ID, {
-                weekday: 'long,
+            return date.toLocaleString('id-ID', {
+                weekday: 'long',
                 year: 'numeric',
                 month: 'long',
                 day: 'numeric',
