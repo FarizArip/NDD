@@ -1205,13 +1205,14 @@ function formatDeadline(deadlineString) {
 
         if (!isMidnight) {
             return date.toLocaleString('id-ID', {
+                timeZone: 'Asia/Jakarta',
                 weekday: 'long',
                 year: 'numeric',
                 month: 'long',
                 day: 'numeric',
                 hour: '2-digit',
                 minute: '2-digit'
-            }).replace(',', ' -');
+            }).replace('pukul', '-');
         }
         // Format: "Saturday, September 27, 2025"
         return date.toLocaleDateString('id-ID', {
